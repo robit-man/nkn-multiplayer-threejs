@@ -1,997 +1,583 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>XR + Desktop + Mobile Nav — NKN Mesh (event-driven pose + sessions)</title>
-<style>
-  html,body{margin:0;height:100%;overflow:hidden;background:#111a;color:#eeea;font-family:monospace}
-  #hint{border-radius:2rem;position:fixed;top:1rem;left:1rem;font-size:.75rem;background:rgba(0,0,0,.5);padding:.5em 1em;pointer-events:none;z-index:10}
-  #request,#geo,#menu{background:black;cursor:pointer;border:none;position:fixed;top:1rem;border-radius:2rem;width:4rem;height:4rem;display:flex;align-items:center;justify-content:center;z-index:11;padding:.5rem}
-  #geo{right:1rem} #request{right:5.5rem} #menu{right:10rem}
+  <meta charset="utf-8" />
+  <title>NKN Mesh — Solid Multi-Peer Video (Low-Latency Path)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://unpkg.com/nkn-sdk@1.3.6/dist/nkn.min.js"></script>
+  <style>
+    :root { --bg:#0b0b0b; --fg:#eee; --muted:#9aa0a6; --line:#1b1b1b; --ok:#30cf6b; --warn:#f7b500; --err:#e84d4d; }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    .wrap{display:grid;grid-template-columns:380px 1fr;gap:14px;min-height:100%;padding:14px;max-width:1700px;margin:0 auto}
+    .card{border:1px solid var(--line);border-radius:12px;background:#0f1011;padding:12px}
+    h1{margin:0 0 10px;font-size:18px}
+    label{display:block;font-size:12px;color:var(--muted);margin:8px 0 6px}
+    input[type="text"], input[type="range"], select{height:36px}
+    input[type="text"], select{width:100%;background:#000;border:1px solid #242424;border-radius:10px;color:var(--fg);padding:8px 10px}
+    .status{display:flex;flex-direction:column;gap:6px}
+    .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .dot{width:10px;height:10px;border-radius:50%;background:#444;border:1px solid #222}
+    .ok{background:var(--ok)} .warn{background:var(--warn)} .err{background:var(--err)}
+    .tiny{font-size:12px;color:var(--muted)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #252525;border-radius:999px;padding:2px 8px;font-size:12px;background:#0a0a0a}
+    .kv{display:inline-flex;gap:6px;align-items:center;background:#0a0a0a;border:1px solid #222;border-radius:8px;padding:4px 8px}
 
-  /* Backdrop + sidebar */
-  #backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);backdrop-filter:blur(1px);display:none;z-index:19}
-  #menuPane{position:fixed;top:0;right:0;width:min(440px,92vw);height:100%;background:#0b0b0fcc;backdrop-filter:saturate(120%) blur(6px);border-left:1px solid #2228;z-index:20;display:none;padding:12px 12px 24px;overflow:auto}
-  #menuPane h2{margin:12px 0 8px;font-size:16px}
-  .kv{display:flex;align-items:center;gap:8px;background:#0008;border:1px solid #222;padding:6px 8px;border-radius:8px;margin:2px 0}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .tiny{font-size:12px;color:#9aa0a6}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  .dot{width:10px;height:10px;border-radius:50%;background:#444;border:1px solid #222}
-  .ok{background:#30cf6b}.warn{background:#f7b500}.err{background:#e84d4d}
-  input[type=text]{width:100%;background:#000;color:#eee;border:1px solid #333;border-radius:8px;padding:8px 10px}
-  .peer{display:flex;gap:10px;align-items:flex-start;border:1px solid #222;background:#0a0a0a;border-radius:10px;padding:8px}
-  .peer .name{font-family:ui-monospace,Menlo,Consolas,monospace}
-  .peer .meta{font-size:12px;color:#9aa0a6}
-  .peer .pose{font-size:12px;color:#ccc;margin-top:2px}
+    #peerList{display:flex;flex-direction:column;gap:8px}
+    .peer{display:grid;grid-template-columns:auto 120px 1fr auto;gap:10px;border:1px solid #212224;background:#0b0c0d;border-radius:10px;padding:8px}
+    .peer .name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .peer .btns{display:flex;gap:6px;align-items:center}
+    .peer button{background:#111;border:1px solid #444;border-radius:10px;color:#fff;padding:0 12px;height:32px;cursor:pointer}
+    .peer button:active{transform:translateY(1px)}
+    .peer button:disabled{opacity:.5;cursor:not-allowed}
 
-  #nuke{
-    margin-top:8px; width:100%; padding:14px 10px; cursor:pointer;
-    border:6px solid #000; border-radius:18px; font-weight:900; text-transform:uppercase;
-    color:#000; background:
-      repeating-linear-gradient(45deg,#ffd400 0,#ffd400 16px,#000 16px,#000 28px);
-    box-shadow:0 3px 0 #000, inset 0 0 0 3px #ffd400;
-  }
-  #nuke .big{display:block;font-size:20px;letter-spacing:1px}
-  #nuke .sub{display:block;font-size:12px;font-weight:700}
-</style>
-<script src="https://unpkg.com/nkn-sdk@1.3.6/dist/nkn.min.js"></script>
+    .preview{width:100%; aspect-ratio:4/3; height:auto; display:flex;align-items:center;justify-content:center;border:1px solid #222;border-radius:8px;background:#000;overflow:hidden}
+    .preview canvas{display:block;width:100%;height:auto;border-radius:6px;background:#000}
+
+    .localVideoBox{display:grid;grid-template-columns:minmax(120px,40%) 1fr;gap:10px;align-items:center}
+    .localVideo{width:100%;max-height:180px;border:1px solid #222;border-radius:8px;background:#000;object-fit:cover}
+
+    @media (max-width: 900px){
+      .wrap{grid-template-columns:1fr;gap:12px;padding:10px}
+      .localVideoBox{grid-template-columns:1fr}
+      .peer{grid-template-columns:auto 1fr;grid-auto-rows:auto}
+      .peer .btns{grid-column:1 / -1}
+    }
+  </style>
 </head>
 <body>
-  <div id="hint">Click to lock • Arrows/WASD/Shift/run • Space/jump • Ctrl/crouch • Touch drag/look • Swipe↑ to jump</div>
-  <button id="menu" title="Menu" aria-label="Menu">
-    <svg xmlns="http://www.w3.org/2000/svg" width="2rem" height="2rem" viewBox="0 0 24 24" fill="none">
-      <path d="M4 6h16M4 12h16M4 18h16" stroke="#eee" stroke-width="2" stroke-linecap="round"/>
-    </svg>
-  </button>
-  <button id="request" title="Enable Sensors" aria-label="Enable Sensors">
-    <svg xmlns="http://www.w3.org/2000/svg" width="2rem" height="2rem" viewBox="0 0 24 24" fill="none">
-      <path d="M12 18H12.01M9.2 21H14.8C15.9201 21 16.4802 21 16.908 20.782C17.2843 20.5903 17.5903 20.2843 17.782 19.908C18 19.4802 18 18.9201 18 17.8V6.2C18 5.0799 18 4.51984 17.782 4.09202C17.5903 3.71569 17.2843 3.40973 16.908 3.21799C16.4802 3 15.9201 3 14.8 3H9.2C8.0799 3 7.51984 3 7.09202 3.21799C6.71569 3.40973 6.40973 3.71569 6.21799 4.09202C6 4.51984 6 5.07989 6 6.2V17.8C6 18.9201 6 19.4802 6.21799 19.908C6.40973 20.2843 6.71569 20.5903 7.09202 20.782C7.51984 21 8.07989 21 9.2 21Z"
-            stroke="#eee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </button>
-  <button id="geo" title="Enable Geolocation" aria-label="Enable Geolocation">
-    <svg xmlns="http://www.w3.org/2000/svg" width="2rem" height="2rem" viewBox="0 0 24 24" fill="none">
-      <path d="M12 2C8.686 2 6 4.686 6 8c0 5.25 6 12 6 12s6-6.75 6-12c0-3.314-2.686-6-6-6Z" stroke="#eee"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="12" cy="8" r="2.5" fill="#eee"/>
-    </svg>
-  </button>
+  <div class="wrap">
+    <!-- LEFT -->
+    <div class="card col" style="display:flex;flex-direction:column;gap:10px">
+      <h1>NKN Mesh — Multi-Peer Video</h1>
 
-  <!-- Backdrop + slide-out menu -->
-  <div id="backdrop" aria-hidden="true"></div>
-  <aside id="menuPane" aria-label="NKN Mesh Menu">
-    <h2>NKN Mesh Status</h2>
-    <div class="row">
-      <span class="kv"><span class="dot" id="dotNkn"></span><b id="txtNkn">NKN: connecting…</b></span>
-      <span class="kv"><span class="dot" id="dotSig"></span><b id="txtSig">Mesh: discovering…</b></span>
+      <div class="card">
+        <label>Primary Signaller Public Key (64-hex) — override</label>
+        <input id="hexSig" class="mono" placeholder="64-hex (blank = default)" spellcheck="false" />
+        <div class="tiny">Default: <code class="mono">5a0a81a8e4d6538a81e59d04057611a779f762da49c5eaf79a96badb91788c0c</code></div>
+      </div>
+
+      <div class="card">
+        <div class="status">
+          <div class="row"><span id="dotNkn" class="dot"></span><div id="txtNkn">NKN: connecting…</div></div>
+          <div class="row"><span id="dotSig" class="dot"></span><div id="txtSig">Mesh: discovering…</div></div>
+          <div class="tiny" id="txtSigMeta">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row"><span class="badge">Local Video</span><span class="tiny">Click any peer’s “Stream” to send</span></div>
+        <div class="localVideoBox">
+          <video id="localVideo" class="localVideo" muted playsinline autoplay></video>
+          <div>
+            <div class="row" style="gap:10px;flex-wrap:wrap">
+              <div>
+                <label>Target FPS</label>
+                <input id="fpsSlider" type="range" min="4" max="30" step="1" value="18" />
+                <div class="tiny"><span id="fpsLbl">18</span> fps (global encoder cadence)</div>
+              </div>
+              <div>
+                <label>Scale (downsize)</label>
+                <input id="sSlider" type="range" min="0.4" max="1.0" step="0.05" value="0.7" />
+                <div class="tiny">Lower = fewer pixels</div>
+              </div>
+              <div>
+                <label>Quality</label>
+                <select id="fmtQ">
+                  <option value="jpeg:0.60" selected>JPEG 0.60</option>
+                  <option value="jpeg:0.70">JPEG 0.70</option>
+                  <option value="webp:0.60">WebP 0.60</option>
+                  <option value="webp:0.70">WebP 0.70</option>
+                </select>
+              </div>
+              <div>
+                <label>Max KB / frame</label>
+                <input id="kbSlider" type="range" min="80" max="900" step="20" value="380" />
+                <div class="tiny"><span id="kbLbl">380</span> KB cap</div>
+              </div>
+              <div class="row" style="gap:8px">
+                <span class="kv"><span>Src FPS</span><strong id="mFps">—</strong></span>
+                <span class="kv"><span>Avg KB</span><strong id="mSize">—</strong></span>
+                <span class="kv"><span>Sent</span><strong id="mSent">0</strong></span>
+                <span class="kv"><span>Dropped</span><strong id="mDrop">0</strong></span>
+              </div>
+            </div>
+            <div class="tiny" style="margin-top:6px">
+              Binary “VF2” frames over NKN, no base64/JSON; latest-only delivery; coalesced ACKs.
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="tiny" id="txtSigMeta">—</div>
 
-    <div style="margin-top:10px">
-      <div class="kv">addr: <span class="mono" id="myAddr">—</span></div>
-      <div class="kv">pub: <span class="mono" id="myPub">—</span></div>
+    <!-- RIGHT -->
+    <div class="card col">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="badge">Peers</div>
+        <div class="tiny">Your addr: <span id="myAddr" class="mono">—</span> • pub: <span id="myPub" class="mono">—</span></div>
+      </div>
+      <div id="peerList"></div>
     </div>
+  </div>
 
-    <h2 style="margin-top:14px">Signaller</h2>
-    <div class="tiny">Primary Signaller Public Key (64-hex override)</div>
-    <input id="hexSig" class="mono" placeholder="64-hex (blank = default)" spellcheck="false" />
-    <div class="tiny">Default: <code class="mono">5a0a81a8e4d6538a81e59d04057611a779f762da49c5eaf79a96badb91788c0c</code></div>
+<script>
+/* ============ helpers & UI ============ */
+const $ = s => document.querySelector(s);
+const shortHex = (s,a=6,b=6)=>s?(s.slice(0,a)+'…'+s.slice(-b)):'—';
+const isHex64 = s => /^[0-9a-f]{64}$/i.test((s||'').trim());
+const now = ()=>Date.now();
+const fmtAgo = ms => { if(ms<1500) return 'now'; const s=Math.floor(ms/1000); if(s<60) return s+'s'; const m=Math.floor(s/60); if(m<60) return m+'m'; const h=Math.floor(m/60); if(h<24) return h+'h'; const d=Math.floor(h/24); return d+'d'; };
+const setNkn=(t,cls)=>{$('#txtNkn').textContent=t;$('#dotNkn').className='dot '+(cls||'');};
+const setSig=(t,cls)=>{$('#txtSig').textContent=t;$('#dotSig').className='dot '+(cls||'');};
+const setSigMeta=t=>{$('#txtSigMeta').textContent=t;};
 
-    <h2 style="margin-top:14px">Pose TX</h2>
-    <div class="row">
-      <span class="kv">Hz: <b id="poseHz">0</b></span>
-      <span class="kv">Sent: <b id="poseSent">0</b></span>
-      <span class="kv">Dropped: <b id="poseDrop">0</b></span>
-      <span class="kv">Rate: <b id="poseRate">0.0</b> <span class="tiny">kbps</span></span>
-    </div>
+const LS={ SEED:'NKN_SEED_HEX_V1', SIGHEX:'NKN_SIG_HEX', PEERBOOK:'NKN_PEERBOOK_V2', KNOWN_IDS:'NKN_KNOWN_IDS_V2' };
+const DEFAULT_SIG_HEX='5a0a81a8e4d6538a81e59d04057611a779f762da49c5eaf79a96badb91788c0c';
 
-    <h2 style="margin-top:14px">Local Pose</h2>
-    <div class="kv"><span class="tiny">pos:</span>&nbsp;<span id="lpPos" class="mono">—</span></div>
-    <div class="kv"><span class="tiny">euler°:</span>&nbsp;<span id="lpEul" class="mono">—</span></div>
-    <div class="kv"><span class="tiny">speed:</span>&nbsp;<span id="lpSpd" class="mono">—</span></div>
+const toHex=u8=>Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
+function getOrCreateSeed(){let hex=localStorage.getItem(LS.SEED); if(/^[0-9a-f]{64}$/i.test(hex||''))return hex; const u=new Uint8Array(32); crypto.getRandomValues(u); hex=toHex(u); localStorage.setItem(LS.SEED,hex); return hex;}
 
-    <h2 style="margin-top:14px">Wallet</h2>
-    <button id="nuke" title="Hard reset identity & caches">
-      <span class="big">⚠️ CAUTION ⚠️</span>
-      <span class="sub">NUKE CREDENTIALS — hard reset identity & caches</span>
-    </button>
-    <div class="tiny" style="margin-top:6px">Generates a new NKN seed and clears caches. You will appear as a new peer.</div>
+/* ============ mesh state ============ */
+let client=null,selfPub=null,selfAddr=null;
+let signallerHex='', signallerPrefix='signal';
 
-    <h2 style="margin-top:14px">Peers</h2>
-    <div class="tiny" id="peerSummary">—</div>
-    <div id="peerList" style="display:flex;flex-direction:column;gap:8px;margin-top:6px"></div>
-  </aside>
+const peers=new Map(); // pub -> {addr,lastTs,isVestigial}
+const knownIdsByPub=new Map(); const idSet=(pub)=>{let s=knownIdsByPub.get(pub); if(!s){s=new Set(['peer','web','signal']); knownIdsByPub.set(pub,s);} return s;};
+const persistKnownIds=()=>{const obj={}; for(const [k,set] of knownIdsByPub.entries()) obj[k]=[...set]; localStorage.setItem(LS.KNOWN_IDS,JSON.stringify(obj));};
+(function loadKnownIds(){try{const t=localStorage.getItem(LS.KNOWN_IDS); if(!t) return; const j=JSON.parse(t); for(const [k,arr] of Object.entries(j)) knownIdsByPub.set(k,new Set(arr));}catch{}})();
 
-  <script type="importmap">
-    {
-      "imports": {
-        "three"   : "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.module.min.js",
-        "VRButton": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/webxr/VRButton.js",
-        "XRControllerModelFactory": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/webxr/XRControllerModelFactory.js",
-        "PointerLockControls": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/controls/PointerLockControls.js"
-      }
+const addrPool=new Map(); // addr -> {lastSeen,lastAck,rttMs,updates,failures,lastProbe}
+const lastLive=(m)=>Math.max(m?.lastAck||0, m?.lastSeen||0);
+function poolAdd(addr,when=now()){ if(!addr) return; const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastSeen=Math.max(m.lastSeen,when); addrPool.set(addr,m); updateSigMeta(); }
+function poolNoteAck(addr,rtt=null){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastAck=now(); if(rtt!=null) m.rttMs=rtt; addrPool.set(addr,m); updateSigMeta(); }
+function poolNoteUpdate(addr){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastSeen=now(); m.updates+=1; addrPool.set(addr,m); updateSigMeta(); }
+function isPeerOnline(pub){ return addressesForPub(pub).some(a => (now()- (addrPool.get(a)?.lastAck||addrPool.get(a)?.lastSeen||0)) < 45000); }
+function onlineCount(){let n=0; for(const [addr,m] of addrPool.entries()) if((now()-(m.lastAck||m.lastSeen||0))<15000) n++; return n;}
+function updateSigMeta(){
+  let best=null,bRtt=Infinity,bSeen=0;
+  for(const [addr,m] of addrPool.entries()){
+    const r=m.rttMs==null?Infinity:m.rttMs; const s=Math.max(m.lastAck||0,m.lastSeen||0);
+    if(r<bRtt||(r===bRtt&&s>bSeen)){best=addr; bRtt=r; bSeen=s;}
+  }
+  const live=onlineCount(), total=addrPool.size;
+  if(!best){ setSig('Mesh: discovering…','warn'); setSigMeta(`targets: ${total} • online: ${live} • latency: —`); }
+  else { const lastSeenStr=bSeen?`${fmtAgo(now()-bSeen)} ago`:'—'; const rtt=(bRtt===Infinity)?'—':`${Math.round(bRtt)} ms`; setSig(`Mesh: ${shortHex(best,7,6)} • ${live}/${total} online`,'ok'); setSigMeta(`last seen: ${lastSeenStr} • latency: ${rtt}`); }
+}
+
+function ensurePeer(pub,{addr=null,ts=now(),vestigial=false}={}){const p=(peers.get(pub)||{addr:null,lastTs:0,isVestigial:false}); if(addr) p.addr=addr; if(ts>(p.lastTs||0)) p.lastTs=ts; p.isVestigial=!!vestigial; peers.set(pub,p); ensurePeerRow(pub); updatePeerUI(pub);}
+
+/* ============ roster / heartbeat ============ */
+let SEND_OPTS={ noReply:true, maxHoldingSeconds:0 }; // drop rather than queue → lower latency
+async function rawSend(to,payload){ try{ return await client.send(to,payload,SEND_OPTS); }catch(e){ throw e; } }
+
+function addressesForPub(pub){const ids=idSet(pub); const set=new Set(); const ent=peers.get(pub); if(ent?.addr) set.add(ent.addr); ids.forEach(id=>set.add(`${id}.${pub}`)); return [...set];}
+function bestAddrForPub(pub){
+  const list = addressesForPub(pub);
+  let best=null,bRtt=Infinity,bSeen=0;
+  for(const a of list){ const m=addrPool.get(a)||{}; const r=(m.rttMs==null)?Infinity:m.rttMs; const s=Math.max(m.lastAck||0,m.lastSeen||0); if(r<bRtt||(r===bRtt&&s>bSeen)){best=a; bRtt=r; bSeen=s;} }
+  return best || list[0];
+}
+async function sendToBest(pub,payload){
+  const list=addressesForPub(pub).sort((a,b)=>{
+    const ma=addrPool.get(a)||{}, mb=addrPool.get(b)||{};
+    const ra=ma.rttMs==null?1e12:ma.rttMs, rb=mb.rttMs==null?1e12:mb.rttMs;
+    if(ra!==rb) return ra-rb;
+    return (Math.max(mb.lastAck||0,mb.lastSeen||0))-(Math.max(ma.lastAck||0,ma.lastSeen||0));
+  });
+  for(const to of list){ try{ await rawSend(to,payload); return true; }catch{} }
+  if(isHex64(signallerHex)){ try{ await rawSend(`${signallerPrefix}.${signallerHex}`, payload); return true; }catch{} }
+  return false;
+}
+
+let hbTimer=null, tickTimer=null;
+function targets(max=200){
+  const set=new Set();
+  if(isHex64(signallerHex)) set.add(`${signallerPrefix}.${signallerHex}`);
+  for(const a of addrPool.keys()) set.add(a);
+  for(const [pub,ent] of peers.entries()){
+    if(ent.addr) set.add(ent.addr);
+    idSet(pub).forEach(id=>set.add(`${id}.${pub}`));
+  }
+  const out=[]; for(const a of set.values()){ if(a!==selfAddr) out.push(a); if(out.length>=max) break; } return out;
+}
+function probeAll(){
+  if(!client||!client.addr||!selfPub) return;
+  const list=targets(); const t0=now();
+  for(const to of list){
+    const id=`hb|${selfPub}|${t0}|${to}`;
+    const m=addrPool.get(to)||{}; m.lastProbe=t0; addrPool.set(to,m);
+    rawSend(to, JSON.stringify({ver:1,type:'hb',id,from:selfPub,t_client:t0,caps:{relay:true,roster:true}})).catch(()=>{});
+    rawSend(to, JSON.stringify({ver:1,type:'peers_req',id:`peers_req|${selfPub}|${t0}`,from:selfPub,ts:t0})).catch(()=>{});
+  }
+}
+function scheduleHB(){ if(hbTimer) clearInterval(hbTimer); hbTimer=setInterval(probeAll, 12000); }
+function scheduleTicks(){ if(tickTimer) clearInterval(tickTimer); tickTimer=setInterval(()=>{
+  const t=now(); for(const [addr,m] of addrPool.entries()){ if((t - Math.max(m.lastSeen||0,m.lastAck||0))<60000){ rawSend(addr, JSON.stringify({ver:1,type:'tick',id:`tick|${selfPub}|${t}|${addr}`,from:selfPub,ts:t})).catch(()=>{}); } }
+}, 5000);}
+
+/* ============ local camera + global encoder (binary VF2) ============ */
+const localVideo=$('#localVideo'), fpsSlider=$('#fpsSlider'), sSlider=$('#sSlider'), fmtQ=$('#fmtQ'), kbSlider=$('#kbSlider');
+const fpsLbl=$('#fpsLbl'), kbLbl=$('#kbLbl');
+fpsSlider.addEventListener('input',()=>fpsLbl.textContent=fpsSlider.value);
+kbSlider.addEventListener('input',()=>kbLbl.textContent=kbSlider.value);
+
+const mFps=$('#mFps'), mSize=$('#mSize'), mSent=$('#mSent'), mDrop=$('#mDrop');
+let srcFpsCount=0, totalSent=0, totalDropped=0, sizeEMA=null;
+setInterval(()=>{ mFps.textContent=String(srcFpsCount); srcFpsCount=0; mSize.textContent = sizeEMA? Math.round(sizeEMA/1024)+' KB':'—'; mSent.textContent=String(totalSent); mDrop.textContent=String(totalDropped); },1000);
+
+async function ensureCamStream(){
+  if(localVideo.srcObject) return localVideo.srcObject;
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:30,max:30}}, audio:false });
+  localVideo.srcObject=stream; localVideo.muted=true; localVideo.playsInline=true; try{ await localVideo.play(); }catch{}
+  startGlobalEncoder(); // kick once camera is live
+  return stream;
+}
+
+let encCanvas=null, encCtx=null, encRAF=null, lastEncAt=0, latestVF2=null;
+
+// Small binary header: 'V','F','2',ver,fmt,flags,w(16be),h(16be),ts(32be),seq(32be) -> 18 bytes
+const VF2 = {
+  MAGIC0: 0x56, MAGIC1: 0x46, MAGIC2: 0x32, VER: 1,
+  FMT_JPEG: 1, FMT_WEBP: 2,
+  pack({fmtCode,w,h,ts,seq,bytesU8}){
+    const out = new Uint8Array(18 + bytesU8.byteLength);
+    out[0]=this.MAGIC0; out[1]=this.MAGIC1; out[2]=this.MAGIC2; out[3]=this.VER;
+    out[4]=fmtCode; out[5]=0; // flags
+    const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
+    dv.setUint16(6, w, false); dv.setUint16(8, h, false);
+    dv.setUint32(10, ts>>>0, false);
+    dv.setUint32(14, seq>>>0, false);
+    out.set(bytesU8, 18);
+    return out;
+  },
+  parse(u8){
+    if(!u8 || u8.length<18) return null;
+    if(u8[0]!==this.MAGIC0 || u8[1]!==this.MAGIC1 || u8[2]!==this.MAGIC2) return null;
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const ver = u8[3]; if(ver!==this.VER) return null;
+    const fmtCode = u8[4];
+    const w = dv.getUint16(6,false), h=dv.getUint16(8,false);
+    const ts = dv.getUint32(10,false), seq=dv.getUint32(14,false);
+    const payload = u8.subarray(18);
+    return {fmtCode,w,h,ts,seq,payload};
+  },
+  mimeFromCode(c){ return c===1?'image/jpeg':(c===2?'image/webp':'application/octet-stream'); }
+};
+
+function startGlobalEncoder(){
+  if(encRAF) return;
+  encCanvas=document.createElement('canvas');
+  encCtx=encCanvas.getContext('2d',{alpha:false,desynchronized:true});
+
+  const encodeOnce = async ()=>{
+    if(localVideo.videoWidth<=0) return null;
+    const scale = parseFloat(sSlider.value||'0.7');
+    const w = Math.max(2, Math.round(localVideo.videoWidth * scale));
+    const h = Math.max(2, Math.round(localVideo.videoHeight * scale));
+    if(encCanvas.width!==w||encCanvas.height!==h){ encCanvas.width=w; encCanvas.height=h; }
+    encCtx.drawImage(localVideo, 0, 0, w, h);
+
+    const [fmt,qStr]=(fmtQ.value||'jpeg:0.6').split(':'); const q=parseFloat(qStr||'0.6');
+    const mime = (fmt==='webp')?'image/webp':'image/jpeg';
+    let blob = await new Promise(res=>encCanvas.toBlob(res, mime, q));
+    const targetKB = parseInt(kbSlider.value||'380',10);
+    if(blob && blob.size > targetKB*1024 && q>0.4){
+      blob = await new Promise(res=>encCanvas.toBlob(res, mime, Math.max(0.4, q-0.1)));
     }
-  </script>
+    if(!blob) return null;
+    const u8 = new Uint8Array(await blob.arrayBuffer());
+    sizeEMA = sizeEMA==null ? u8.byteLength : (0.8*sizeEMA + 0.2*u8.byteLength);
+    const ts=now(), seq=ts|0;
+    const fmtCode = (mime==='image/jpeg')?VF2.FMT_JPEG:VF2.FMT_WEBP;
+    const packed = VF2.pack({fmtCode,w,h,ts,seq,bytesU8:u8});
+    srcFpsCount++;
+    return { ts, seq, w, h, bytes:u8.byteLength, packed };
+  };
 
-  <script type="module">
-    import * as THREE from 'three';
-    import { VRButton } from 'VRButton';
-    import { XRControllerModelFactory } from 'XRControllerModelFactory';
-    import { PointerLockControls } from 'PointerLockControls';
-
-    /* ---------- utils ---------- */
-    const now=()=>Date.now();
-    const deg=THREE.MathUtils.radToDeg;
-    const rad=THREE.MathUtils.degToRad;
-    const shortHex=(s,a=6,b=6)=>s?(s.slice(0,a)+'…'+s.slice(-b)):'—';
-    const fmtAgo=ms=>{ if(ms<1500)return'now'; const s=Math.floor(ms/1000); if(s<60)return s+'s'; const m=Math.floor(s/60); if(m<60)return m+'m'; const h=Math.floor(m/60); if(h<24)return h+'h'; const d=Math.floor(h/24); return d+'d';};
-    const isHex64=s=>/^[0-9a-f]{64}$/i.test((s||'').trim());
-    const setNkn=(t,c)=>{ txtNkn.textContent=t; dotNkn.className='dot '+(c||''); };
-    const setSig=(t,c)=>{ txtSig.textContent=t; dotSig.className='dot '+(c||''); };
-    const setSigMeta=t=>{ txtSigMeta.textContent=t; };
-    const isMobile=/Mobi|Android/i.test(navigator.userAgent);
-
-    /* ---------- UI refs ---------- */
-    const menuBtn = document.getElementById('menu');
-    const menuPane= document.getElementById('menuPane');
-    const backdrop= document.getElementById('backdrop');
-    const dotNkn  = document.getElementById('dotNkn');
-    const txtNkn  = document.getElementById('txtNkn');
-    const dotSig  = document.getElementById('dotSig');
-    const txtSig  = document.getElementById('txtSig');
-    const txtSigMeta = document.getElementById('txtSigMeta');
-    const myAddr = document.getElementById('myAddr');
-    const myPub  = document.getElementById('myPub');
-    const poseHzEl=document.getElementById('poseHz');
-    const poseSentEl=document.getElementById('poseSent');
-    const poseDropEl=document.getElementById('poseDrop');
-    const poseRateEl=document.getElementById('poseRate');
-    const lpPos=document.getElementById('lpPos');
-    const lpEul=document.getElementById('lpEul');
-    const lpSpd=document.getElementById('lpSpd');
-    const peerSummary=document.getElementById('peerSummary');
-    const peerList=document.getElementById('peerList');
-    const hexSig=document.getElementById('hexSig');
-    const nukeBtn=document.getElementById('nuke');
-
-    function openMenu(){ backdrop.style.display='block'; menuPane.style.display='block'; }
-    function closeMenu(){ backdrop.style.display='none';  menuPane.style.display='none'; }
-    menuBtn.addEventListener('click', openMenu);
-    backdrop.addEventListener('click', closeMenu);
-
-    /* ---------- scene ---------- */
-    class SceneManager{
-      constructor(){
-        this.renderer=new THREE.WebGLRenderer({antialias:true});
-        this.renderer.setSize(innerWidth,innerHeight);
-        this.renderer.setPixelRatio(devicePixelRatio);
-        this.renderer.xr.enabled=true;
-        // Avoid implicit floor offset; we manage height.
-        this.renderer.xr.setReferenceSpaceType?.('local');
-
-        document.body.appendChild(this.renderer.domElement);
-        document.body.appendChild(VRButton.createButton(this.renderer));
-        this.scene=new THREE.Scene();
-        this.scene.background=new THREE.Color(0x202020);
-        this.camera=new THREE.PerspectiveCamera(75, innerWidth/innerHeight, .05, 1000);
-        // Camera at dolly origin; dolly.y = ground + eyeHeight
-        this.camera.position.set(0,0,0);
-        this.dolly=new THREE.Group();
-        this.dolly.add(this.camera);
-        this.scene.add(this.dolly);
-        this.scene.add(new THREE.HemisphereLight(0xffffbb,0x080820,.8));
-
-        // Remote avatars container
-        this.remoteLayer=new THREE.Group();
-        this.scene.add(this.remoteLayer);
-
-        addEventListener('resize',()=>{
-          this.camera.aspect=innerWidth/innerHeight;
-          this.camera.updateProjectionMatrix();
-          this.renderer.setSize(innerWidth,innerHeight);
-        });
-      }
+  // Align to real camera frame cadence when available
+  const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  const stepRAF = async (t)=>{
+    const targetMs = 1000 / parseInt(fpsSlider.value||'18',10);
+    if((t-lastEncAt) >= targetMs){
+      lastEncAt = t;
+      const vf2 = await encodeOnce();
+      if(vf2){ latestVF2 = vf2; for(const [pub] of streamsOut) sendLatestToPeer(pub); }
     }
-
-    /* ---------- Input (desktop + MOBILE TOUCH with jump swipe) ---------- */
-    class Input{
-      constructor(sceneMgr){
-        this.sceneMgr=sceneMgr;
-        this.controls=new PointerLockControls(sceneMgr.dolly, document.body);
-        this.m={f:false,b:false,l:false,r:false,run:false,crouch:false,jump:false};
-        document.body.addEventListener('click',()=>{ if(!sceneMgr.renderer.xr.isPresenting && !isMobile) this.controls.lock(); });
-        addEventListener('keydown',e=>this._k(e,true)); addEventListener('keyup',e=>this._k(e,false));
-
-        // Mobile touch → world X/Z
-        this.touch={active:false, x0:0,y0:0,t0:0, dxNorm:0,dyNorm:0};
-        const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
-        const MAXD=200, SWIPE_MIN=80, SWIPE_MS=250;
-        const onStart=(e)=>{
-          if(!isMobile) return;
-          const t=e.touches[0]; this.touch.active=true;
-          this.touch.x0=t.clientX; this.touch.y0=t.clientY; this.touch.t0=now();
-          this.touch.dxNorm=0; this.touch.dyNorm=0;
-        };
-        const onMove=(e)=>{
-          if(!isMobile||!this.touch.active) return;
-          const t=e.touches[0];
-          let dx=t.clientX-this.touch.x0, dy=t.clientY-this.touch.y0;
-          dx=clamp(dx,-MAXD,MAXD); dy=clamp(dy,-MAXD,MAXD);
-          this.touch.dxNorm = dx / MAXD;
-          this.touch.dyNorm = dy / MAXD;   // +down, -up
-          e.preventDefault();
-        };
-        const onEnd=()=>{
-          if(!isMobile||!this.touch.active) return;
-          const dt=now()-this.touch.t0;
-          const dyEnd=this.touch.dyNorm*MAXD;
-          if((-dyEnd) > SWIPE_MIN && dt < SWIPE_MS) this.m.jump=true; // upward fast flick
-          this.touch.active=false; this.touch.dxNorm=0; this.touch.dyNorm=0;
-        };
-        window.addEventListener('touchstart',onStart,{passive:true});
-        window.addEventListener('touchmove',onMove,{passive:false});
-        window.addEventListener('touchend',onEnd,{passive:true});
+    encRAF = requestAnimationFrame(stepRAF);
+  };
+  const stepRVFC = async ()=>{
+    if(!localVideo.requestVideoFrameCallback){ stepRAF(0); return; }
+    localVideo.requestVideoFrameCallback(async ()=>{
+      const targetMs = 1000 / parseInt(fpsSlider.value||'18',10);
+      const t = performance.now();
+      if((t-lastEncAt) >= targetMs){
+        lastEncAt = t;
+        const vf2 = await encodeOnce();
+        if(vf2){ latestVF2 = vf2; for(const [pub] of streamsOut) sendLatestToPeer(pub); }
       }
-      _k(e,d){
-        switch(e.code){
-          case'ArrowUp':case'KeyW':this.m.f=d;break;
-          case'ArrowDown':case'KeyS':this.m.b=d;break;
-          case'ArrowLeft':case'KeyA':this.m.l=d;break;
-          case'ArrowRight':case'KeyD':this.m.r=d;break;
-          case'ShiftLeft':case'ShiftRight':this.m.run=d;break;
-          case'ControlLeft':case'ControlRight':this.m.crouch=d;break;
-          case'Space': if(d) this.m.jump=true; break;
-        }
-      }
-      consumeJump(){ const j=this.m.jump; this.m.jump=false; return j; }
+      stepRVFC();
+    });
+  };
+
+  if(useRVFC) stepRVFC(); else encRAF = requestAnimationFrame(stepRAF);
+}
+
+/* ============ per-peer TX state (latest-only) ============ */
+const streamsOut=new Map(); // pub -> {inFlight:boolean, pending:boolean, sent:number, sizeEMA:number, ack:{winSent,winAck,lastAckAt,e2eEma}, fpsTick,txCountSec,txFps}
+function startStreamingTo(pub){
+  if(streamsOut.has(pub)) return;
+  streamsOut.set(pub,{inFlight:false,pending:false,sent:0,sizeEMA:null,ack:{winSent:0,winAck:0,lastAckAt:0,e2eEma:null},fpsTick:now(),txCountSec:0,txFps:0});
+  sendToBest(pub, JSON.stringify({ver:1,type:'video_offer',id:`vof|${selfPub}|${now()}`,from:selfPub,to:pub,ts:now()})).catch(()=>{});
+  sendLatestToPeer(pub); updatePeerUI(pub);
+}
+function stopStreamingTo(pub){ streamsOut.delete(pub); updatePeerUI(pub); }
+
+async function sendLatestToPeer(pub){
+  const st=streamsOut.get(pub); if(!st || !latestVF2) return;
+  if(st.inFlight){ st.pending = true; return; }
+  st.inFlight = true; st.pending=false;
+
+  const payload = latestVF2.packed; // Uint8Array
+  const ok = await sendToBest(pub, payload).catch(()=>false);
+  st.inFlight = false;
+
+  if(ok){
+    st.sent++; st.ack.winSent++; totalSent++;
+    st.sizeEMA = st.sizeEMA==null? latestVF2.bytes : 0.85*st.sizeEMA + 0.15*latestVF2.bytes;
+    st.txCountSec++; const t=now(); if(t - st.fpsTick >= 1000){ st.txFps = st.txCountSec; st.txCountSec=0; st.fpsTick=t; }
+  } else {
+    totalDropped++;
+  }
+  if(st.pending) sendLatestToPeer(pub);
+  updatePeerUI(pub);
+}
+
+/* ============ RX sinks (stable canvas per peer) + fast decode + ACK ============ */
+const incomingSinks=new Map(); // pub -> {holder,canvas,ctx,w,h}
+function ensureSink(pub){
+  let s=incomingSinks.get(pub);
+  const row = document.querySelector(`.peer[data-pub="${pub}"]`);
+  if(!row) return null;
+  let holder = row.querySelector('.preview');
+  if(!holder){ holder=document.createElement('div'); holder.className='preview'; row.insertBefore(holder, row.children[1]||null); }
+  if(s && s.canvas && s.canvas.isConnected){ if(s.holder!==holder){ holder.replaceChildren(s.canvas); s.holder=holder; } return s; }
+  const c=document.createElement('canvas'); c.width=320; c.height=240; const ctx=c.getContext('2d',{alpha:false});
+  holder.replaceChildren(c);
+  s={holder,canvas:c,ctx,w:320,h:240}; incomingSinks.set(pub,s); return s;
+}
+function setAspect(holder,w,h){
+  if(holder && 'aspectRatio' in holder.style) holder.style.aspectRatio=`${w} / ${h}`;
+  else if(holder){ const cw=holder.clientWidth||160; holder.style.height=Math.round(cw*h/w)+'px'; }
+}
+
+async function decodeU8ToDrawable(u8, mime){
+  // WebCodecs ImageDecoder → ImageBitmap; otherwise createImageBitmap; otherwise <img>
+  try{
+    if('ImageDecoder' in window){
+      const ab = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+      const dec = new ImageDecoder({data: ab, type: mime});
+      const {image} = await dec.decode();
+      return { type:'bitmap', bmp:image, w:image.codedWidth||image.displayWidth, h:image.codedHeight||image.displayHeight, close:()=>image.close() };
     }
-
-    /* ────────────────────────────────────────────────────────────────
-       Hex grid + auto-elevation (USGS EPQS)
-    ───────────────────────────────────────────────────────────────── */
-    const DIRS = [[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]];
-    class UniformHexGrid {
-      constructor(spacing=5, size=100){
-        this.spacing=spacing; this.radius=size/2; this._build();
-      }
-      _build(){
-        const s=this.spacing, h=Math.sqrt(3)/2*s, N=Math.floor(this.radius/s);
-        const map={}, pos=[]; let idx=0;
-        for(let j=-N;j<=N;j++){
-          for(let i=-N;i<=N;i++){
-            if(Math.max(Math.abs(i),Math.abs(j),Math.abs(i+j))>N) continue;
-            const x=(i + j/2)*s, z=j*h;
-            map[`${i},${j}`]=idx++; pos.push(x,0,z);
-          }
-        }
-        const tri=[];
-        for(let j=-N;j<N;j++){
-          for(let i=-N;i<N;i++){
-            const a=map[`${i},${j}`], b=map[`${i+1},${j}`], c=map[`${i},${j+1}`], d=map[`${i+1},${j+1}`];
-            if(a!=null&&b!=null&&c!=null) tri.push(a,b,c);
-            if(b!=null&&d!=null&&c!=null) tri.push(b,d,c);
-          }
-        }
-        this.geometry=new THREE.BufferGeometry();
-        this.geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(pos),3).setUsage(THREE.DynamicDrawUsage));
-        this.geometry.setIndex(tri);
-        const n=pos.length/3, cols=new Float32Array(n*3);
-        for(let i=0;i<n;i++){ cols[3*i]=.2; cols[3*i+1]=.4; cols[3*i+2]=.8; }
-        this.geometry.setAttribute('color', new THREE.BufferAttribute(cols,3).setUsage(THREE.DynamicDrawUsage));
-        this.geometry.computeVertexNormals();
-        const mat=new THREE.MeshStandardMaterial({vertexColors:true, side:THREE.DoubleSide, metalness:.15, roughness:.85});
-        const mesh=new THREE.Mesh(this.geometry, mat); mesh.frustumCulled=false;
-        const wire=new THREE.Mesh(this.geometry,new THREE.MeshBasicMaterial({wireframe:true, opacity:.12, transparent:true}));
-        wire.frustumCulled=false; wire.renderOrder=1;
-        this.group=new THREE.Group(); this.group.add(mesh, wire);
-        this.mesh=mesh;
-      }
-      get object(){ return this.group; }
+  }catch{}
+  try{
+    if('createImageBitmap' in window){
+      const bmp = await createImageBitmap(new Blob([u8], {type:mime}));
+      return { type:'bitmap', bmp, w:bmp.width, h:bmp.height, close:()=>bmp.close && bmp.close() };
     }
+  }catch{}
+  // Fallback <img>
+  const url = URL.createObjectURL(new Blob([u8], {type:mime}));
+  const img = new Image(); img.src=url; await img.decode(); URL.revokeObjectURL(url);
+  return { type:'img', img, w:img.naturalWidth, h:img.naturalHeight, close:()=>{} };
+}
 
-    class TileManager {
-      constructor(scene, spacing=5, tileRadius=50){
-        this.scene=scene; this.spacing=spacing; this.tileRadius=tileRadius;
-        this.tiles=new Map(); this.origin=null;
-        this.ray=new THREE.Raycaster(); this.DOWN=new THREE.Vector3(0,-1,0);
-        this._lastHeight=0;
+const rxState=new Map(); // pub -> {decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0}
+async function processQueue(pub){
+  const st=rxState.get(pub)||{decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0};
+  if(st.decoding||!st.queued) return;
+  st.decoding=true; rxState.set(pub,st);
+  const job=st.queued; st.queued=null;
+  try{
+    const mime = VF2.mimeFromCode(job.fmtCode);
+    const drawable = await decodeU8ToDrawable(job.u8, mime);
+    const w=job.w||drawable.w, h=job.h||drawable.h;
+    const sink=ensureSink(pub); if(!sink){ drawable.close(); st.decoding=false; rxState.set(pub,st); return; }
+    setAspect(sink.holder,w,h);
+    if(sink.canvas.width!==w||sink.canvas.height!==h){ sink.canvas.width=w; sink.canvas.height=h; }
+    if(drawable.type==='bitmap') sink.ctx.drawImage(drawable.bmp,0,0,w,h); else sink.ctx.drawImage(drawable.img,0,0,w,h);
+    drawable.close();
+    st.rxCount++; const t=now(); if(t - st.rxTick >= 1000){ st.rxFps = st.rxCount; st.rxCount=0; st.rxTick=t; }
+  }catch{} finally{
+    st.decoding=false; rxState.set(pub,st);
+    if(st.queued) processQueue(pub);
+  }
+  // coalesced ACK by time/seq (tighter for latency)
+  st.lastSeenSeq = Math.max(st.lastSeenSeq, job.seq|0);
+  const nowMs=now();
+  if(nowMs - (st.lastAckSent||0) > 120){
+    st.lastAckSent = nowMs;
+    sendToBest(pub, JSON.stringify({ver:1,type:'video_ack',id:`vack|${selfPub}|${st.lastSeenSeq}`,from:selfPub,to:pub,ts:nowMs,ackSeq:st.lastSeenSeq})).catch(()=>{});
+  }
+  updatePeerUI(pub);
+}
 
-        if(!scene.userData._tmLightsAdded){
-          scene.add(new THREE.AmbientLight(0xffffff,.55));
-          const sun=new THREE.DirectionalLight(0xffffff,.65);
-          sun.position.set(50,100,50); sun.castShadow=true; scene.add(sun);
-          scene.userData._tmLightsAdded=true;
+function onBinaryFrame(fromPub, u8){
+  const f = VF2.parse(u8); if(!f) return;
+  const pub = fromPub.toLowerCase();
+  ensurePeer(pub,{ts:now(),vestigial:false,addr:bestAddrForPub(pub)||`web.${pub}`});
+  let st=rxState.get(pub); if(!st){ st={decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0}; rxState.set(pub,st); }
+  st.queued = { fmtCode:f.fmtCode, u8:f.payload, w:f.w|0, h:f.h|0, ts:f.ts|0, seq: f.seq|0 };
+  processQueue(pub);
+}
+
+/* ============ Peer list (stable rows) ============ */
+const peerList=$('#peerList');
+function ensurePeerRow(pub){
+  let row=document.querySelector(`.peer[data-pub="${pub}"]`);
+  if(row) return row;
+  row=document.createElement('div'); row.className='peer'; row.dataset.pub=pub;
+
+  const dot=document.createElement('span'); dot.className='dot warn';
+  const preview=document.createElement('div'); preview.className='preview';
+
+  const grow=document.createElement('div');
+  const name=document.createElement('div'); name.className='name'; name.textContent=shortHex(pub,8,6);
+  const meta=document.createElement('div'); meta.className='tiny meta'; meta.textContent='—';
+  grow.appendChild(name); grow.appendChild(meta);
+
+  const btns=document.createElement('div'); btns.className='btns';
+  const bVid=document.createElement('button'); bVid.textContent=(streamsOut.has(pub)?'Stream ■':'Stream ▶');
+  bVid.onclick=async (e)=>{
+    e.stopPropagation(); await ensureCamStream();
+    if(!streamsOut.has(pub)){ startStreamingTo(pub); bVid.textContent='Stream ■'; }
+    else { stopStreamingTo(pub); bVid.textContent='Stream ▶'; }
+    updatePeerUI(pub);
+  };
+  btns.appendChild(bVid);
+
+  row.appendChild(dot); row.appendChild(preview); row.appendChild(grow); row.appendChild(btns);
+  peerList.appendChild(row);
+  return row;
+}
+function peerMetaText(pub){ const ent=peers.get(pub)||{}; const ago=ent.lastTs? fmtAgo(now()-ent.lastTs)+' ago':'—'; return ent.isVestigial? `last seen ${ago}` : `active • ${ago}`; }
+function updatePeerUI(pub){
+  const row=document.querySelector(`.peer[data-pub="${pub}"]`); if(!row) return;
+  row.querySelector('.name').textContent = shortHex(pub,8,6);
+  const meta=row.querySelector('.tiny.meta');
+  const dot=row.querySelector('.dot');
+  const st=streamsOut.get(pub)||null;
+  const rx=rxState.get(pub)||null;
+  const txFps = st? (st.txFps||0) : 0;
+  const rxFps = rx? (rx.rxFps||0) : 0;
+  const avgKB = st?.sizeEMA!=null ? Math.round(st.sizeEMA/1024) : 0;
+  const ackPct = st && st.ack ? (st.ack.winSent? Math.round((st.ack.winAck/st.ack.winSent)*100) : 0) : 0;
+  if(meta) meta.textContent = `${peerMetaText(pub)} • tx ${txFps}fps • rx ${rxFps}fps • ~${avgKB}KB • ack ${ackPct}%`;
+  if(dot) dot.className='dot '+( isPeerOnline(pub)?'ok':(peers.get(pub)?.isVestigial?'err':'warn') );
+}
+setInterval(()=>{ for(const [pub] of peers.entries()) updatePeerUI(pub); }, 1500);
+
+/* ============ NKN wiring (binary-aware) ============ */
+const seenIds=new Map(); setInterval(()=>{const cut=now()-120000; for(const [id,ts] of seenIds.entries()) if(ts<cut) seenIds.delete(id);},15000);
+function markSeen(msg){const id=(msg&&typeof msg.id==='string')?msg.id:`${msg?.type||'?'}|${msg?.from||'?'}|${msg?.ts||0}`; const t=now(); const prev=seenIds.get(id); if(prev&&(t-prev)<60000) return true; seenIds.set(id,t); return false;}
+
+async function connectNkn(){
+  try{
+    setNkn('NKN: connecting…','warn');
+    const seed=getOrCreateSeed();
+    client=new window.nkn.MultiClient({ seed, identifier:'web', numSubClients:8, originalClient:true });
+
+    client.onConnect(()=>{ 
+      selfAddr=client.addr||null; selfPub=client.getPublicKey()||null; 
+      $('#myAddr').textContent=selfAddr||'—'; $('#myPub').textContent=selfPub||'—'; 
+      setNkn('NKN: connected','ok'); scheduleHB(); scheduleTicks(); probeAll();
+      for(const to of targets()) rawSend(to, JSON.stringify({ver:1,type:'peers_req',id:`peers_req|${selfPub}|${now()}`,from:selfPub,ts:now()})).catch(()=>{});
+      ensureCamStream().catch(()=>{});
+    });
+
+    client.onMessage(async ({src,payload})=>{
+      if(src){
+        const m=/^([a-z0-9_-]+)\.([0-9a-f]{64})$/i.exec(src);
+        if(m){ idSet(m[2].toLowerCase()).add(m[1]); persistKnownIds(); poolAdd(src, now()); ensurePeer(m[2].toLowerCase(),{addr:src,ts:now()}); }
+        else { poolAdd(src, now()); }
+      }
+
+      // BINARY FAST PATH (VF2)
+      if(payload instanceof Uint8Array && payload.length>=3 && payload[0]===VF2.MAGIC0 && payload[1]===VF2.MAGIC1 && payload[2]===VF2.MAGIC2){
+        const pub = (src?.split('.')?.pop()||'').toLowerCase();
+        if(pub) onBinaryFrame(pub, payload);
+        return;
+      }
+
+      // Otherwise treat as text JSON (roster, hb, acks)
+      let text=payload;
+      if(payload instanceof Uint8Array){
+        try{ text=new TextDecoder().decode(payload); }catch{ return; }
+      }
+      if(typeof text!=='string') return;
+      let msg=null; if(text.trim().startsWith('{')){ try{ msg=JSON.parse(text); }catch{} }
+      const tsNow=now(); if(!msg) return; if(markSeen(msg)) return;
+
+      if(msg.type==='hb'){ rawSend(src, JSON.stringify({ver:1,type:'hb_ack',id:msg.id||`hb_ack|${selfPub}|${tsNow}`,from:selfPub,t_client:msg.t_client})).catch(()=>{}); if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
+      if(msg.type==='hb_ack' && typeof msg.t_client==='number'){ const rtt=Math.max(0,tsNow-(msg.t_client||tsNow)); poolNoteAck(src,rtt); if(msg.from){ ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); } return; }
+      if(msg.type==='tick'){ if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
+
+      if(msg.type==='peers'){ const arr=Array.isArray(msg.items)?msg.items:[]; for(const it of arr){ const pub=(it.pub||'').toLowerCase(); if(!pub||pub===(selfPub||'').toLowerCase()) continue; const ids=idSet(pub); (Array.isArray(it.ids)?it.ids:[]).forEach(id=>ids.add(id)); ids.forEach(id=>poolAdd(`${id}.${pub}`, tsNow)); const addrGuess = it.addr || (ids.size?`${[...ids][0]}.${pub}`:`web.${pub}`); poolAdd(addrGuess, tsNow); ensurePeer(pub,{addr:addrGuess,ts:typeof it.last==='number'?it.last:tsNow,vestigial:!!it.vestigial}); } persistKnownIds(); return; }
+      if(msg.type==='peers_req'){ const roster={ ver:1, type:'peers', id:`peers|${selfPub}|${now()}`, ts:now(), items:[...peers.entries()].map(([pub,ent])=>({ pub, ids:[...idSet(pub)], addr: ent.addr||`web.${pub}`, last: ent.lastTs||0, vestigial: !!ent.isVestigial })) }; rawSend(src, JSON.stringify(roster)).catch(()=>{}); return; }
+
+      if(msg.type==='join'){ const ack={ver:1,type:'joined',id:`joined|${selfPub}|${tsNow}`,ts:tsNow,addr:selfAddr,prefix:'peer'}; sendToBest(msg.from, JSON.stringify(ack)).catch(()=>{}); const from=msg.from?.toLowerCase(); if(from) ensurePeer(from,{ts:tsNow}); return; }
+      if(msg.type==='joined'){ poolNoteAck(src,null); return; }
+      if(msg.type==='leave' && msg.from){ const from=msg.from.toLowerCase(); const ent=peers.get(from)||{}; ensurePeer(from,{ts:tsNow,vestigial:true,addr:ent.addr||`web.${from}`}); return; }
+
+      if(msg.type==='video_offer' && msg.from && (!msg.to || msg.to===selfPub)){ const ack={ver:1,type:'video_accept',id:`vack|${selfPub}|${tsNow}`,from:selfPub,to:msg.from,ts:tsNow}; sendToBest(msg.from, JSON.stringify(ack)).catch(()=>{}); return; }
+      if(msg.type==='video_accept' && msg.from && msg.to===selfPub){ return; }
+
+      // Legacy JSON frame path (kept for compatibility, though we now send VF2)
+      if(msg.type==='video_frame' && msg.from && msg.b64 && (msg.fmt==='jpeg'||msg.fmt==='webp')){
+        const mime=(msg.fmt==='webp')?'image/webp':'image/jpeg';
+        const bin=atob(msg.b64); const u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+        const pub = msg.from.toLowerCase();
+        ensurePeer(pub,{ts:now(),vestigial:false,addr:bestAddrForPub(pub)||`web.${pub}`});
+        let st=rxState.get(pub); if(!st){ st={decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0}; rxState.set(pub,st); }
+        st.queued = { fmtCode:(mime==='image/jpeg')?VF2.FMT_JPEG:VF2.FMT_WEBP, u8, w:msg.w|0, h:msg.h|0, ts:msg.ts|0, seq: (msg.seq|0)||0 };
+        processQueue(pub);
+        return;
+      }
+
+      if(msg.type==='video_ack' && msg.from && msg.to===selfPub){
+        const from=msg.from.toLowerCase();
+        const st=streamsOut.get(from); if(!st) return;
+        const ackSeq=(msg.ackSeq|0)||0;
+        if(ackSeq>0){
+          st.ack.winAck++; st.ack.lastAckAt = now();
+          const e2e = now() - ackSeq;
+          st.ack.e2eEma = st.ack.e2eEma==null? e2e : 0.8*st.ack.e2eEma + 0.2*e2e;
+          updatePeerUI(from);
+        }else if(typeof msg.srcTs==='number'){ // legacy
+          st.ack.winAck++; st.ack.lastAckAt=now(); const e2e=now()-msg.srcTs; st.ack.e2eEma = st.ack.e2eEma==null? e2e : 0.8*st.ack.e2eEma + 0.2*e2e; updatePeerUI(from);
         }
-
-        document.addEventListener('gps-updated', e=>{
-          if(!this.origin){ this.origin=e.detail; this.addTile(0,0); }
-        }, { once:true });
+        return;
       }
-
-      addTile(q,r){
-        const id=`${q},${r}`; if(this.tiles.has(id)) return;
-        const grid=new UniformHexGrid(this.spacing, this.tileRadius*2);
-        grid.group.name=`tile-${id}`;
-        const a=this.tileRadius;
-        grid.group.position.set( 1.5*a*q, 0, a*(Math.sqrt(3)/2*q + Math.sqrt(3)*r) );
-        this.scene.add(grid.group);
-        this.tiles.set(id, {grid,q,r, fetched:new Set(), populating:false});
-        setTimeout(()=>this._populate(id),0);
-      }
-
-      _populate(id){
-        const data=this.tiles.get(id); if(!data||!this.origin||data.populating) return;
-        data.populating=true;
-        const {grid,fetched}=data;
-        const pos=grid.geometry.attributes.position; const n=pos.count;
-        const queue=[]; for(let i=0;i<n;i++) queue.push(i);
-        queue.sort((a,b)=>{
-          const ax=pos.getX(a), az=pos.getZ(a), bx=pos.getX(b), bz=pos.getZ(b);
-          return (bx*bx+bz*bz)-(ax*ax+az*az);
-        });
-
-        const mLat=111320;
-        const mLon=111320*Math.cos(this.origin.lat*Math.PI/180);
-        const MAX_CON=6; let active=0;
-
-        const apply=(i,val)=>{
-          pos.setY(i,val);
-          fetched.add(i);
-          pos.needsUpdate=true;
-          grid.geometry.computeVertexNormals();
-          active--; dequeue();
-        };
-
-        const dequeue=()=>{
-          while(active<MAX_CON && queue.length){
-            const i=queue.shift(); active++;
-            const wx=grid.group.position.x + pos.getX(i);
-            const wz=grid.group.position.z + pos.getZ(i);
-            const lat=this.origin.lat + wz/mLat;
-            const lon=this.origin.lon + wx/mLon;
-            fetch(`https://epqs.nationalmap.gov/v1/json?x=${lon}&y=${lat}&wkid=4326&units=Meters`)
-              .then(r=>r.json()).then(d=>apply(i, d?.value ?? 0))
-              .catch(()=>apply(i,0));
-          }
-          if(active===0 && queue.length===0){ data.populating=false; }
-        };
-        dequeue();
-      }
-
-      update(playerPos){
-        if(!this.origin) return;
-        const a=this.tileRadius;
-        const qf=(2/3*playerPos.x)/a;
-        const rf=((-1/3*playerPos.x) + (Math.sqrt(3)/3*playerPos.z))/a;
-        const q0=Math.round(qf), r0=Math.round(rf);
-        this._ensure(q0,r0);
-        for(const [dx,dy] of DIRS) this._ensure(q0+dx, r0+dy);
-        while(this.tiles.size>600){
-          const first=this.tiles.keys().next().value;
-          const {grid}=this.tiles.get(first);
-          this.scene.remove(grid.group);
-          grid.geometry.dispose(); this.tiles.delete(first);
-        }
-      }
-
-      _ensure(q,r){ if(!this.tiles.has(`${q},${r}`)) this.addTile(q,r); }
-
-      getHeightAt(x,z){
-        const tmp=new THREE.Vector3(x,10000,z); // start high to guarantee a hit
-        const meshes=[...this.tiles.values()].map(d=>d.grid.mesh);
-        this.ray.set(tmp,this.DOWN);
-        const hit=this.ray.intersectObjects(meshes,true);
-        if(hit.length){ this._lastHeight=hit[0].point.y; return this._lastHeight; }
-        return this._lastHeight;
-      }
-    }
-
-    /* ---------- Locomotion (terrain snap + JUMP + mobile world-axes drag) ---------- */
-    class Locomotion{
-      constructor(sceneMgr,input,orientationRef){
-        this.sceneMgr=sceneMgr; this.input=input; this.orientationRef=orientationRef||{ready:false};
-        this.baseSpeed=2; this.runMul=2.5; this._spd=0;
-        this.GRAV=20;
-        this.baseEye=1.6; this.crouchEye=0.9; this.jumpPeak=2.4;
-        this.eyeY=this.baseEye; this.vertVel=0; this.jumpState='idle';
-        this.CROUCH_EASE=6;
-        this._jumpJustStarted=false;
-      }
-      update(dt, groundY, xrPresenting){
-        const dol=this.sceneMgr.dolly;
-
-        if(this.input.consumeJump() && this.jumpState==='idle'){
-          const h=this.jumpPeak-this.baseEye;
-          this.vertVel=Math.sqrt(2*this.GRAV*h);
-          this.jumpState='jumping';
-          this._jumpJustStarted=true;
-        }
-
-        if(this.jumpState==='jumping'){
-          this.vertVel -= this.GRAV * dt;
-          this.eyeY += this.vertVel * dt;
-          if(this.eyeY <= this.baseEye){
-            this.eyeY = this.baseEye;
-            this.vertVel = 0;
-            this.jumpState = 'idle';
-          }
-        }else{
-          const target = this.input.m.crouch ? this.crouchEye : this.baseEye;
-          this.eyeY += (target - this.eyeY) * Math.min(1, this.CROUCH_EASE * dt);
-        }
-
-        if(isMobile && this.orientationRef.ready && !xrPresenting){
-          const {a,b,g}=this.orientationRef;
-          const euler=new THREE.Euler(rad(b||0), rad(a||0), rad(-(g||0)), 'YXZ');
-          const q=new THREE.Quaternion().setFromEuler(euler)
-            .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -Math.PI/2));
-          dol.quaternion.copy(q);
-        }
-
-        if (isMobile && !xrPresenting){
-          const maxSpeed = this.baseSpeed * this.runMul;
-          const vx = THREE.MathUtils.clamp(this.input.touch.dxNorm,-1,1) * maxSpeed;
-          const vz = -THREE.MathUtils.clamp(this.input.touch.dyNorm,-1,1) * maxSpeed;
-          if (vx || vz){
-            dol.position.x += vx * dt;
-            dol.position.z += vz * dt;
-            this._spd = Math.hypot(vx, vz);
-          } else {
-            this._spd = 0;
-          }
-        }
-        else if(this.input.controls.isLocked || !isMobile){
-          const fwd=new THREE.Vector3(); this.sceneMgr.camera.getWorldDirection(fwd); fwd.y=0; fwd.normalize();
-          const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0));
-          let mx=0,mz=0; const m=this.input.m;
-          if(m.f)mz++; if(m.b)mz--; if(m.l)mx--; if(m.r)mx++;
-          if(mx||mz){
-            const dir=new THREE.Vector3().addScaledVector(right,mx).addScaledVector(fwd,mz).normalize();
-            const s=this.baseSpeed*(m.run?this.runMul:1);
-            dol.position.addScaledVector(dir, s*dt);
-            this._spd=s;
-          }else{ this._spd=0; }
-        }
-
-        // Snap to terrain + eye offset
-        dol.position.y = (groundY ?? 0) + this.eyeY;
-      }
-      speed(){ return this._spd; }
-      eyeHeight(){ return this.eyeY; }
-      popJumpStarted(){ const j=this._jumpJustStarted; this._jumpJustStarted=false; return j; }
-    }
-
-    /* ---------- remote avatars (ball + arrow + stick + local jump anim) ---------- */
-    function colorFrom(pub){ let h=0; for(let i=0;i<pub.length;i++) h=(h*31+pub.charCodeAt(i))>>>0; const hue=h%360; const c=new THREE.Color(); c.setHSL(hue/360,.65,.55); return c; }
-    function makeLabel(text){
-      const pad=4,fs=12,c=document.createElement('canvas'),x=c.getContext('2d');
-      x.font=`${fs}px ui-monospace, Menlo, Consolas, monospace`;
-      const w=Math.ceil(x.measureText(text).width)+pad*2,h=fs*4+pad*3; c.width=w;c.height=h;
-      x.font=`${fs}px ui-monospace, Menlo, Consolas, monospace`;
-      x.fillStyle='rgba(0,0,0,.6)'; x.fillRect(0,0,w,h); x.strokeStyle='rgba(255,255,255,.25)'; x.strokeRect(.5,.5,w-1,h-1);
-      x.fillStyle='#fff'; x.textBaseline='top'; text.split('\n').forEach((line,i)=>x.fillText(line,pad,pad+i*(fs+4)));
-      const tex=new THREE.CanvasTexture(c); const mat=new THREE.SpriteMaterial({map:tex,transparent:true});
-      const spr=new THREE.Sprite(mat); spr.scale.set(w/200,h/200,1); spr.center.set(0.5,0); return spr;
-    }
-    class Remotes{
-      constructor(sceneMgr, heightSampler){
-        this.sceneMgr=sceneMgr; this.heightAt=heightSampler;
-        this.map=new Map(); this.latest=new Map();
-        this.GRAV=20; this.JUMP_H=0.8;
-      }
-      ensure(pub){
-        if(this.map.has(pub)) return this.map.get(pub);
-        const g=new THREE.Group(); g.position.set(0,0,0);
-
-        const ball=new THREE.Mesh(
-          new THREE.SphereGeometry(0.22,32,16),
-          new THREE.MeshStandardMaterial({color:colorFrom(pub),metalness:.2,roughness:.7})
-        );
-
-        const arrow=new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,0), 0.8, 0xffffff, 0.15, 0.08);
-
-        const stickGeo = new THREE.CylinderGeometry(0.02,0.02, 1.6, 8);
-        const stickMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness:.2, roughness:.6 });
-        const stick = new THREE.Mesh(stickGeo, stickMat);
-        stick.position.y = -0.8;
-
-        const label=makeLabel(shortHex(pub,8,6));
-        ball.add(arrow);
-        g.add(ball, stick);
-        label.position.set(0,1.0,0);
-        g.add(label);
-
-        this.sceneMgr.remoteLayer.add(g);
-        const ent={group:g,ball,arrow,label,stick,stickH:1.6, baseY:1.6, groundY:0, jumpState:'idle', jumpYOffset:0, vertVel:0};
-        this.map.set(pub,ent);
-        return ent;
-      }
-      update(pub, pose, info){
-        const ent=this.ensure(pub);
-        const x=pose.p[0], z=pose.p[2];
-        const groundY = this.heightAt ? this.heightAt(x,z) : 0;
-        const baseY = groundY + 1.6;
-        ent.groundY = groundY;
-        ent.baseY = baseY;
-
-        if (pose.j){
-          ent.jumpState='jumping';
-          ent.vertVel=Math.sqrt(2*this.GRAV*this.JUMP_H);
-        }
-
-        const q=new THREE.Quaternion(pose.q[0],pose.q[1],pose.q[2],pose.q[3]);
-        ent.group.quaternion.copy(q);
-
-        ent.group.position.x = x;
-        ent.group.position.z = z;
-
-        const curY = (ent.baseY + ent.jumpYOffset);
-        const eul=new THREE.Euler().setFromQuaternion(q,'YXZ');
-        const txt=`${shortHex(pub,8,6)}
-rtt ${info?.rtt!=null?Math.round(info.rtt)+'ms':'—'} • age ${info?.age??'—'}
-P(${x.toFixed(2)},${curY.toFixed(2)},${z.toFixed(2)})
-YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
-        ent.group.remove(ent.label); ent.label.material.map.dispose(); ent.label.material.dispose();
-        ent.label=makeLabel(txt); ent.label.position.set(0,2.0,0); ent.group.add(ent.label);
-
-        this.latest.set(pub, {pose, info, ts: now()});
-      }
-      tick(dt){
-        for (const ent of this.map.values()){
-          if (ent.jumpState==='jumping'){
-            ent.vertVel -= 20 * dt;
-            ent.jumpYOffset += ent.vertVel * dt;
-            if (ent.jumpYOffset <= 0){
-              ent.jumpYOffset = 0;
-              ent.vertVel = 0;
-              ent.jumpState='idle';
-            }
-          }
-          ent.group.position.y = ent.baseY + ent.jumpYOffset;
-
-          const h = Math.max(0.05, ent.group.position.y - ent.groundY);
-          if (Math.abs(h - (ent.stickH||0)) > 1e-3) {
-            ent.stick.geometry.dispose();
-            ent.stick.geometry = new THREE.CylinderGeometry(0.02,0.02, h, 8);
-            ent.stickH = h;
-          }
-          ent.stick.position.y = -h/2;
-        }
-      }
-    }
-
-    /* ---------- IP geolocate (seed tiles) ---------- */
-    async function ipLocate(){
-      const tries=[
-        async()=>{ const r=await fetch('https://ipapi.co/json/'); const j=await r.json(); return {lat:+j.latitude,lon:+j.longitude}; },
-        async()=>{ const r=await fetch('https://ipwho.is/'); const j=await r.json(); return {lat:+j.latitude,lon:+j.longitude}; },
-        async()=>{ const r=await fetch('https://get.geojs.io/v1/ip/geo.json'); const j=await r.json(); return {lat:+j.latitude,lon:+j.longitude}; }
-      ];
-      for(const f of tries){ try{ const {lat,lon}=await f(); if(Number.isFinite(lat)&&Number.isFinite(lon)){
-        document.dispatchEvent(new CustomEvent('gps-updated',{detail:{lat,lon}})); return true; } }catch{} }
-      return false;
-    }
-
-    /* ---------- NKN mesh (sessions + packets) ---------- */
-    class Mesh{
-      constructor(app){
-        this.app=app;
-        this.client=null; this.selfPub=null; this.selfAddr=null;
-        this.signallerHex=''; this.DEFAULT_SIG='5a0a81a8e4d6538a81e59d04057611a779f762da49c5eaf79a96badb91788c0c';
-
-        this.peers=new Map();
-        this.addrPool=new Map();
-        this.latestPose=new Map();
-        this.knownIds=new Map();
-
-        // Sessions (ncp-js)
-        this.sessions=new Map();   // pub -> session
-
-        this.hzCount=0; this.sent=0; this.dropped=0;
-        this.byteWindow=[];
-
-        setInterval(()=>{ poseHzEl.textContent=String(this.hzCount); poseSentEl.textContent=String(this.sent); poseDropEl.textContent=String(this.dropped); this.hzCount=0; this._updateRate(); },1000);
-        setInterval(()=>this._renderPeers(),1500);
-
-        this._applySig(localStorage.getItem('NKN_SIG_HEX')||'');
-        this._connect();
-
-        hexSig.value=localStorage.getItem('NKN_SIG_HEX')||'';
-        hexSig.addEventListener('input',()=>this._applySig(hexSig.value));
-        nukeBtn.addEventListener('click',()=>this._nuke());
-      }
-
-      _updateRate(){
-        const t=now();
-        this.byteWindow=this.byteWindow.filter(e=>t-e.t<5000);
-        const bytes=this.byteWindow.reduce((s,e)=>s+e.bytes,0);
-        poseRateEl.textContent=((bytes*8)/5000).toFixed(1);
-      }
-      _noteBytes(str){ try{ const b=(new TextEncoder()).encode(str).length; this.byteWindow.push({t:now(),bytes:b}); }catch{} }
-
-      _applySig(raw){
-        const v=(raw||'').trim().toLowerCase();
-        this.signallerHex=isHex64(v)?v:this.DEFAULT_SIG;
-        if(isHex64(v)) localStorage.setItem('NKN_SIG_HEX', v);
-        setSig(`Mesh: targeting ${shortHex(this.signallerHex,8,8)}`,'warn');
-        setSigMeta('probing…');
-      }
-
-      _idSet(pub){ let s=this.knownIds.get(pub); if(!s){ s=new Set(['peer','web','phone','client']); this.knownIds.set(pub,s); } return s; }
-      _bestAddrs(pub){
-        const ids=[...this._idSet(pub)];
-        const candidates=new Set(ids.map(id=>`${id}.${pub}`));
-        const ent=this.peers.get(pub); if(ent?.addr) candidates.add(ent.addr);
-        return [...candidates].sort((a,b)=>{
-          const A=this.addrPool.get(a)||{}, B=this.addrPool.get(b)||{};
-          const ra=A.rttMs==null?1e12:A.rttMs, rb=B.rttMs==null?1e12:B.rttMs;
-          if(ra!==rb) return ra-rb;
-          return (B.lastAck||0)-(A.lastAck||0);
-        });
-      }
-
-      async _connect(){
-        try{
-          setNkn('NKN: connecting…','warn');
-          let hex=localStorage.getItem('NKN_SEED_HEX_V1');
-          const makeSeed=()=>{ const u=new Uint8Array(32); crypto.getRandomValues(u); return Array.from(u).map(b=>b.toString(16).padStart(2,'0')).join(''); };
-          if(!isHex64(hex)){ hex=makeSeed(); localStorage.setItem('NKN_SEED_HEX_V1', hex); }
-          this.client=new window.nkn.MultiClient({ seed: hex, identifier:'web', numSubClients:8, originalClient:true });
-
-          // Session support (ncp-js) — guard for older SDKs
-          try{
-            if (typeof this.client.listen === 'function' && typeof this.client.onSession === 'function') {
-              this.client.listen();
-              this.client.onSession((session)=>this._acceptSession(session));
-            } else {
-              console.warn('[NKN] Session API not available on this sdk build.');
-            }
-          }catch(e){ console.warn('[NKN] session init error', e); }
-
-          this.client.onConnect(()=>{
-            this.selfAddr=this.client.addr||null;
-            this.selfPub=(this.client.getPublicKey()||'').toLowerCase();
-            myAddr.textContent=this.selfAddr||'—';
-            myPub.textContent=this.selfPub||'—';
-            setNkn('NKN: connected','ok');
-            this._blast({type:'hello',from:this.selfPub,ts:now()});
-            this._blast({type:'peers_req',from:this.selfPub,ts:now()});
-          });
-
-          this.client.onMessage(({src,payload})=>{
-            if(src){ const m=/^([a-z0-9_-]+)\.([0-9a-f]{64})$/i.exec(src); if(m){ this._idSet(m[2].toLowerCase()).add(m[1]); } }
-            let text=payload; if(payload instanceof Uint8Array){ try{text=new TextDecoder().decode(payload);}catch{} }
-            if(typeof text!=='string' || !text.trim().startsWith('{')) return;
-            let msg=null; try{ msg=JSON.parse(text);}catch{ return; }
-            const t=now();
-
-            if(msg.type==='hello' && msg.from){
-              const pub=msg.from.toLowerCase();
-              this._touchPeer(pub,t);
-              // auto visual
-              this.app.remotes.ensure(pub);
-              return;
-            }
-            if(msg.type==='hb'){
-              this._sendRaw(src, JSON.stringify({type:'hb_ack',from:this.selfPub,t_client:msg.t_client}));
-              this._touchPeer(msg.from,t); return;
-            }
-            if(msg.type==='hb_ack' && typeof msg.t_client==='number'){
-              const rtt=Math.max(0,now()-msg.t_client);
-              const m=this.addrPool.get(src)||{}; m.lastAck=now(); m.rttMs=rtt; this.addrPool.set(src,m);
-              setSigMeta(`latency: ${Math.round(rtt)} ms`); return;
-            }
-            if(msg.type==='peers' && Array.isArray(msg.items)){
-              for(const it of msg.items){
-                const pub=(it.pub||'').toLowerCase(); if(!pub||pub===this.selfPub) continue;
-                this._touchPeer(pub,t);
-                const ids=Array.isArray(it.ids)?it.ids:[]; ids.forEach(id=>this._idSet(pub).add(id));
-                if(it.addr) this.peers.get(pub).addr=it.addr;
-                this.app.remotes.ensure(pub);
-              }
-              this._renderPeers(); return;
-            }
-            if(msg.type==='peers_req'){ this._sendRoster(src); return; }
-
-            if(msg.type==='pose' && msg.from && Array.isArray(msg.pose?.p) && Array.isArray(msg.pose?.q)){
-              const pub=msg.from.toLowerCase();
-              this._touchPeer(pub, t);
-              const info={rtt:this.addrPool.get(src)?.rttMs ?? null, age: fmtAgo(now()-msg.ts)};
-              const pose=msg.pose;
-              this.latestPose.set(pub, {p:pose.p, q:pose.q, ts:msg.ts, j:pose.j?1:0});
-              this.app.remotes.update(pub, {p:pose.p, q:pose.q, j:pose.j?1:0}, info);
-              this._renderPeers();
-              return;
-            }
-          });
-
-          this.client.on('willreconnect',()=>setNkn('NKN: reconnecting…','warn'));
-          this.client.on('connectFailed',()=>setNkn('NKN: connect failed','err'));
-          this.client.on('close',()=>setNkn('NKN: disconnected','err'));
-
-          setInterval(()=>this._heartbeat(), 6000);
-          setInterval(()=>this._blast({type:'peers_req',from:this.selfPub,ts:now()}), 20000);
-
-        }catch(err){ console.warn(err); setNkn('NKN: init failed','err'); }
-      }
-
-      /* ---------- Session helpers ---------- */
-      _acceptSession(session){
-        const m = /\.([0-9a-f]{64})$/i.exec(session.remoteAddr || "");
-        const pub = m ? m[1].toLowerCase() : null;
-        if (!pub) return;
-
-        const prev = this.sessions.get(pub);
-        if (prev && prev !== session) { try{ prev.close?.(); }catch{} }
-        this.sessions.set(pub, session);
-
-        // Reader loop (you can route payload types here if you multiplex)
-        const readLoop = async () => {
-          try {
-            while (true) {
-              const data = await session.read(); // Uint8Array
-              if (!data || data.length===0) break;
-              // Example: decode JSON control frames if you prefix them
-              // this._onSessionData(pub, data);
-            }
-          } catch (e) {
-            console.warn('[NKN][session] read error', e);
-          } finally {
-            this.sessions.delete(pub);
-            try { session.close?.(); } catch {}
-          }
-        };
-        readLoop();
-        console.log('[NKN][session] established', session.localAddr, '⇄', session.remoteAddr);
-      }
-
-      async _getOrDialSession(pub){
-        const alive=this.sessions.get(pub);
-        if(alive) return alive;
-
-        const addrs=this._bestAddrs(pub);
-        let lastErr;
-        for(const to of addrs){
-          try{
-            const s = await this.client.dial?.(to);
-            if (!s) throw new Error('dial unsupported');
-            this.sessions.set(pub, s);
-            this._acceptSession(s); // starts reader
-            return s;
-          }catch(e){ lastErr = e; }
-        }
-        try{
-          const relay=`signal.${this.signallerHex}`;
-          const s=await this.client.dial?.(relay);
-          if (!s) throw new Error('dial unsupported');
-          this.sessions.set(pub, s); this._acceptSession(s);
-          return s;
-        }catch(e){ throw lastErr || e; }
-      }
-
-      async _sessionWrite(pub, bytes){
-        const s=await this._getOrDialSession(pub);
-        await s.write(bytes);
-      }
-
-      // Example API you can call: reliable snapshot
-      async sendStateSnapshot(pub, obj){
-        const enc = new TextEncoder().encode(JSON.stringify({type:'state',v:obj}));
-        await this._sessionWrite(pub, enc);
-      }
-      // Example chunk-sender (voice/file)
-      async sendChunk(pub, chunkUint8){ await this._sessionWrite(pub, chunkUint8); }
-
-      /* ---------- Packet utilities ---------- */
-      _touchPeer(pub,ts){
-        if(!pub) return;
-        const p=this.peers.get(pub)||{addr:null,lastTs:0,isVestigial:false};
-        p.lastTs=Math.max(p.lastTs||0, ts||now());
-        this.peers.set(pub,p);
-        this._renderPeers();
-      }
-
-      _renderPeers(){
-        const t=now();
-        const rows=[...this.peers.entries()].sort((a,b)=>(b[1].lastTs||0)-(a[1].lastTs||0));
-        peerList.innerHTML='';
-        for(const [pub,ent] of rows){
-          const row=document.createElement('div'); row.className='peer';
-          const dot=document.createElement('span'); const online=this._online(pub);
-          dot.className='dot '+(online?'ok':'warn');
-          const left=document.createElement('div');
-          const name=document.createElement('div'); name.className='name'; name.textContent=shortHex(pub,8,6);
-          const meta=document.createElement('div'); meta.className='meta';
-          const ago=ent.lastTs? fmtAgo(t-(ent.lastTs||t))+' ago':'—';
-          meta.textContent= online?(`online • ${ago}`):(`last ${ago}`);
-          const poseDiv=document.createElement('div'); poseDiv.className='pose';
-          const lp=this.latestPose.get(pub);
-          if(lp){ const eul=new THREE.Euler().setFromQuaternion(new THREE.Quaternion(lp.q[0],lp.q[1],lp.q[2],lp.q[3]),'YXZ');
-            poseDiv.textContent=`addr: ${ent.addr||'—'} | pose: ${lp.p.map(v=>v.toFixed(2)).join(', ')} | yaw ${deg(eul.y).toFixed(1)}°${lp.j? ' • jumped': ''}`; }
-          else poseDiv.textContent=`addr: ${ent.addr||'—'} | pose: —`;
-          left.appendChild(name); left.appendChild(meta); left.appendChild(poseDiv);
-          row.appendChild(dot); row.appendChild(left); peerList.appendChild(row);
-        }
-        let online=0; for(const pub of this.peers.keys()) if(this._online(pub)) online++;
-        peerSummary.textContent=`${this.peers.size} peers • ${online}/${this.addrPool.size} addrs online`;
-      }
-
-      _online(pub){
-        const addrs=this._bestAddrs(pub);
-        const t=now();
-        return addrs.some(a => (this.addrPool.get(a)?.lastAck||0) > t-12000);
-      }
-
-      _sendRoster(to){
-        const items=[];
-        for(const [pub,ent] of this.peers.entries()){
-          items.push({pub, ids:[...this._idSet(pub)], addr: ent.addr||null, last: ent.lastTs||0});
-        }
-        this._sendRaw(to, JSON.stringify({type:'peers',items,ts:now()}));
-      }
-
-      _targets(){
-        const set=new Set();
-        if(isHex64(this.signallerHex)) set.add(`signal.${this.signallerHex}`);
-        for(const a of this.addrPool.keys()) set.add(a);
-        for(const [pub] of this.peers.entries()){
-          this._idSet(pub).forEach(id=>set.add(`${id}.${pub}`));
-          set.add(`peer.${pub}`); set.add(`web.${pub}`); set.add(`phone.${pub}`);
-        }
-        return [...set].filter(a=>a!==this.selfAddr);
-      }
-
-      _blast(obj){
-        const msg=JSON.stringify(obj);
-        this._noteBytes(msg);
-        for(const to of this._targets()){ this._sendRaw(to,msg).catch(()=>{}); }
-      }
-
-      async sendPoseIfChanged(p, q, yOverride, jumpEvent=false){
-        const t=now();
-        if(!this._posePrev) this._posePrev={p:[p.x,p.y,p.z], q:[q.x,q.y,q.z,q.w], t:0};
-        const prev=this._posePrev;
-        const posDelta=Math.hypot(p.x-prev.p[0], p.y-prev.p[1], p.z-prev.p[2]);
-        const dot=prev.q[0]*q.x + prev.q[1]*q.y + prev.q[2]*q.z + prev.q[3]*q.w;
-        const ang=2*Math.acos(Math.min(1,Math.abs(dot)));
-        const changed = posDelta>0.02 || ang>rad(2) || jumpEvent;
-        const intervalOk = (t - (this._posePrev.t||0)) >= 100 || jumpEvent;
-        if(!changed || !intervalOk) return;
-        this._posePrev={p:[p.x,p.y,p.z], q:[q.x,q.y,q.z,q.w], t:t};
-
-        const y = Number.isFinite(yOverride) ? yOverride : p.y;
-        const pkt = JSON.stringify({
-          type:'pose', from:this.selfPub, ts:t,
-          pose:{
-            p:[+p.x.toFixed(2), +y.toFixed(2), +p.z.toFixed(2)],
-            q:[+q.x.toFixed(3), +q.y.toFixed(3), +q.z.toFixed(3), +q.w.toFixed(3)],
-            j: jumpEvent ? 1 : 0
-          }
-        });
-        this._noteBytes(pkt);
-        this.hzCount++;
-
-        for(const [pub] of this.peers.entries()){
-          if(pub===this.selfPub) continue;
-          if(!this._online(pub)) continue;
-          const addrs=this._bestAddrs(pub);
-          let sent=false;
-          for(const to of addrs){ try{ await this._sendRaw(to,pkt); sent=true; break; }catch{} }
-          if(!sent){ try{ await this._sendRaw(`signal.${this.signallerHex}`, pkt); sent=true; }catch{} }
-          if(sent){ this.sent++; } else { this.dropped++; }
-        }
-      }
-
-      _heartbeat(){
-        const t=now();
-        const ids=this._targets();
-        for(const to of ids){
-          const m=this.addrPool.get(to)||{}; m.lastProbe=t; this.addrPool.set(to,m);
-          const hb=JSON.stringify({type:'hb', from:this.selfPub, t_client:t});
-          this._noteBytes(hb);
-          this._sendRaw(to, hb).catch(()=>{});
-        }
-      }
-
-      _sendRaw(to, text){ return this.client.send(to, text, {noReply:true, maxHoldingSeconds:1}); }
-
-      _nuke(){
-        if(!confirm('This will wipe identity and caches. Continue?')) return;
-        try{
-          localStorage.removeItem('NKN_SEED_HEX_V1');
-          localStorage.removeItem('NKN_SIG_HEX');
-          for(const k of Object.keys(localStorage)){ if(/^tile:/.test(k) || k==='elevCacheV1') localStorage.removeItem(k); }
-        }finally{ location.reload(); }
-      }
-    }
-
-    /* ---------- Sensors (mobile orientation) ---------- */
-    class Sensors{
-      constructor(){
-        this.btn=document.getElementById('request');
-        this.orient={a:0,b:0,g:0,ready:false};
-        this.btn.addEventListener('click',()=>this.enable(),{once:true});
-      }
-      async enable(){
-        try{ if(typeof DeviceOrientationEvent?.requestPermission==='function'){ await DeviceOrientationEvent.requestPermission(); } }catch{}
-        window.addEventListener('deviceorientation',(e)=>{
-          if(e.alpha==null && e.beta==null && e.gamma==null) return;
-          this.orient.a=e.alpha||0; this.orient.b=e.beta||0; this.orient.g=e.gamma||0; this.orient.ready=true;
-        }, true);
-        this.btn.disabled=true;
-      }
-    }
-
-    class GeoButton{
-      constructor(){ this.btn=document.getElementById('geo'); if(!('geolocation' in navigator)){ this.btn.style.display='none'; return; }
-        this.btn.addEventListener('click',()=>this.ask(),{once:true}); }
-      ask(){
-        navigator.geolocation.getCurrentPosition(p=>{
-          document.dispatchEvent(new CustomEvent('gps-updated',{detail:{lat:p.coords.latitude, lon:p.coords.longitude}}));
-        },()=>{}, {enableHighAccuracy:true});
-      }
-    }
-
-    /* ---------- App ---------- */
-    class App{
-      constructor(){
-        if(location.protocol!=='https:'){ location.href='https:'+window.location.href.substring(location.protocol.length); }
-        this.sceneMgr=new SceneManager();
-        this.sensors=new Sensors();
-        this.input=new Input(this.sceneMgr);
-
-        this.hexGridMgr=new TileManager(this.sceneMgr.scene, 5, 50);
-        ipLocate();
-
-        this.move=new Locomotion(this.sceneMgr,this.input,this.sensors.orient);
-        this.clock=new THREE.Clock();
-
-        this._uiTimer=setInterval(()=>this._updateLocalPoseUI(), 200);
-
-        this.remotes=new Remotes(this.sceneMgr, (x,z)=>this.hexGridMgr.getHeightAt(x,z));
-        this.mesh=new Mesh(this);
-
-        this.sceneMgr.renderer.setAnimationLoop(()=>this._tick());
-      }
-
-      _updateLocalPoseUI(){
-        const p=this.sceneMgr.dolly.position, q=this.sceneMgr.dolly.quaternion;
-        const e=new THREE.Euler().setFromQuaternion(q,'YXZ');
-        lpPos.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`;
-        lpEul.textContent = `${deg(e.y).toFixed(1)}/${deg(e.x).toFixed(1)}/${deg(e.z).toFixed(1)}`;
-        lpSpd.textContent = `${this.move.speed().toFixed(2)} m/s`;
-      }
-
-      _tick(){
-        const dt=this.clock.getDelta();
-        const pos=this.sceneMgr.dolly.position;
-
-        const groundY=this.hexGridMgr.getHeightAt(pos.x,pos.z);
-        this.hexGridMgr.update(pos);
-
-        const xrOn = this.sceneMgr.renderer.xr.isPresenting;
-        this.move.update(dt, groundY, xrOn);
-
-        // Failsafe: clamp rig above ground + current eye height
-        const minY = groundY + this.move.eyeHeight();
-        if (this.sceneMgr.dolly.position.y < minY) {
-          this.sceneMgr.dolly.position.y = minY;
-        }
-
-        const actualY = groundY + this.move.eyeHeight();
-        const jumpEvt = this.move.popJumpStarted();
-        this.mesh.sendPoseIfChanged(this.sceneMgr.dolly.position, this.sceneMgr.dolly.quaternion, actualY, jumpEvt);
-
-        this.remotes.tick(dt);
-
-        this.sceneMgr.renderer.render(this.sceneMgr.scene, this.sceneMgr.camera);
-      }
-    }
-
-    // Boot
-    new GeoButton();
-    new App();
-  </script>
+    });
+
+    client.on('error',()=>setNkn('NKN: error','err'));
+    client.on('connectFailed',()=>setNkn('NKN: connect failed (retrying)','warn'));
+    client.on('willreconnect',()=>setNkn('NKN: reconnecting…','warn'));
+    client.on('close',()=>setNkn('NKN: disconnected','err'));
+  }catch{ setNkn('NKN: init failed','err'); }
+}
+
+/* ============ signaller override + start ============ */
+const hexInput=$('#hexSig'); hexInput.value=localStorage.getItem(LS.SIGHEX)||'';
+function applySignallerHex(raw){ const v=(raw||'').trim().toLowerCase(); signallerHex=isHex64(v)?v:DEFAULT_SIG_HEX; if(isHex64(v)) localStorage.setItem(LS.SIGHEX,v); signallerPrefix='signal'; const primary=`${signallerPrefix}.${signallerHex}`; poolAdd(primary,now()); setSig(`Mesh: prim ${shortHex(primary,7,6)} + peers`,'warn'); setSigMeta('probing…'); probeAll(); }
+hexInput.addEventListener('input',()=>applySignallerHex(hexInput.value)); applySignallerHex(hexInput.value||DEFAULT_SIG_HEX);
+
+connectNkn();
+setInterval(()=>{ if(!client||!client.addr||!selfPub) return; const pkt={ver:1,type:'join',id:`join|${selfPub}|${now()}`,from:selfPub,addr:selfAddr,ts:now(),caps:{relay:true,roster:true}}; for(const to of targets()) rawSend(to, JSON.stringify(pkt)).catch(()=>{}); }, 15000);
+addEventListener('beforeunload',()=>{ try{ const pkt={ver:1,type:'leave',id:`leave|${selfPub}|${now()}`,from:selfPub,addr:selfAddr,ts:now()}; for(const to of targets()) rawSend(to, JSON.stringify(pkt)).catch(()=>{}); }catch{} });
+
+ensureCamStream().catch(()=>{});
+</script>
 </body>
 </html>
