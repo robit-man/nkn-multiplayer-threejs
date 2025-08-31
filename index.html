@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>XR + Desktop + Mobile Nav — NKN Mesh (event-driven pose)</title>
+<title>XR + Desktop + Mobile Nav — NKN Mesh (event-driven pose + sessions)</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#111a;color:#eeea;font-family:monospace}
   #hint{border-radius:2rem;position:fixed;top:1rem;left:1rem;font-size:.75rem;background:rgba(0,0,0,.5);padding:.5em 1em;pointer-events:none;z-index:10}
@@ -25,7 +25,6 @@
   .peer .meta{font-size:12px;color:#9aa0a6}
   .peer .pose{font-size:12px;color:#ccc;margin-top:2px}
 
-  /* Comical nuke button */
   #nuke{
     margin-top:8px; width:100%; padding:14px 10px; cursor:pointer;
     border:6px solid #000; border-radius:18px; font-weight:900; text-transform:uppercase;
@@ -168,13 +167,16 @@
         this.renderer.setSize(innerWidth,innerHeight);
         this.renderer.setPixelRatio(devicePixelRatio);
         this.renderer.xr.enabled=true;
+        // Avoid implicit floor offset; we manage height.
+        this.renderer.xr.setReferenceSpaceType?.('local');
+
         document.body.appendChild(this.renderer.domElement);
         document.body.appendChild(VRButton.createButton(this.renderer));
         this.scene=new THREE.Scene();
         this.scene.background=new THREE.Color(0x202020);
-   this.camera=new THREE.PerspectiveCamera(75, innerWidth/innerHeight, .05, 1000);
-   // Camera at dolly origin; dolly.y already = ground + eyeHeight
-   this.camera.position.set(0,0,0);
+        this.camera=new THREE.PerspectiveCamera(75, innerWidth/innerHeight, .05, 1000);
+        // Camera at dolly origin; dolly.y = ground + eyeHeight
+        this.camera.position.set(0,0,0);
         this.dolly=new THREE.Group();
         this.dolly.add(this.camera);
         this.scene.add(this.dolly);
@@ -201,12 +203,10 @@
         document.body.addEventListener('click',()=>{ if(!sceneMgr.renderer.xr.isPresenting && !isMobile) this.controls.lock(); });
         addEventListener('keydown',e=>this._k(e,true)); addEventListener('keyup',e=>this._k(e,false));
 
-        /* Mobile touch → world X/Z */
+        // Mobile touch → world X/Z
         this.touch={active:false, x0:0,y0:0,t0:0, dxNorm:0,dyNorm:0};
         const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
-        const MAXD=200;            // px for full speed
-        const SWIPE_MIN=80;        // px upward
-        const SWIPE_MS=250;        // max duration for a jump swipe
+        const MAXD=200, SWIPE_MIN=80, SWIPE_MS=250;
         const onStart=(e)=>{
           if(!isMobile) return;
           const t=e.touches[0]; this.touch.active=true;
@@ -218,21 +218,16 @@
           const t=e.touches[0];
           let dx=t.clientX-this.touch.x0, dy=t.clientY-this.touch.y0;
           dx=clamp(dx,-MAXD,MAXD); dy=clamp(dy,-MAXD,MAXD);
-          this.touch.dxNorm = dx / MAXD;       // -1..1 → world X velocity sign
-          this.touch.dyNorm = dy / MAXD;       // -1..1 → world Z velocity sign (positive = finger down)
+          this.touch.dxNorm = dx / MAXD;
+          this.touch.dyNorm = dy / MAXD;   // +down, -up
           e.preventDefault();
         };
-        const onEnd=(e)=>{
+        const onEnd=()=>{
           if(!isMobile||!this.touch.active) return;
           const dt=now()-this.touch.t0;
-          const dyEnd=this.touch.dyNorm*MAXD; // back to px
-          // Upward fast flick → jump
-          if((-dyEnd) > SWIPE_MIN && dt < SWIPE_MS){
-            this.m.jump=true;
-          }
-          // stop motion
-          this.touch.active=false;
-          this.touch.dxNorm=0; this.touch.dyNorm=0;
+          const dyEnd=this.touch.dyNorm*MAXD;
+          if((-dyEnd) > SWIPE_MIN && dt < SWIPE_MS) this.m.jump=true; // upward fast flick
+          this.touch.active=false; this.touch.dxNorm=0; this.touch.dyNorm=0;
         };
         window.addEventListener('touchstart',onStart,{passive:true});
         window.addEventListener('touchmove',onMove,{passive:false});
@@ -246,7 +241,7 @@
           case'ArrowRight':case'KeyD':this.m.r=d;break;
           case'ShiftLeft':case'ShiftRight':this.m.run=d;break;
           case'ControlLeft':case'ControlRight':this.m.crouch=d;break;
-          case'Space': if(d) this.m.jump=true; break; // one-shot
+          case'Space': if(d) this.m.jump=true; break;
         }
       }
       consumeJump(){ const j=this.m.jump; this.m.jump=false; return j; }
@@ -372,7 +367,6 @@
         const q0=Math.round(qf), r0=Math.round(rf);
         this._ensure(q0,r0);
         for(const [dx,dy] of DIRS) this._ensure(q0+dx, r0+dy);
-        // (prune)
         while(this.tiles.size>600){
           const first=this.tiles.keys().next().value;
           const {grid}=this.tiles.get(first);
@@ -384,7 +378,7 @@
       _ensure(q,r){ if(!this.tiles.has(`${q},${r}`)) this.addTile(q,r); }
 
       getHeightAt(x,z){
-        const tmp=new THREE.Vector3(x,100000,z);
+        const tmp=new THREE.Vector3(x,10000,z); // start high to guarantee a hit
         const meshes=[...this.tiles.values()].map(d=>d.grid.mesh);
         this.ray.set(tmp,this.DOWN);
         const hit=this.ray.intersectObjects(meshes,true);
@@ -397,9 +391,7 @@
     class Locomotion{
       constructor(sceneMgr,input,orientationRef){
         this.sceneMgr=sceneMgr; this.input=input; this.orientationRef=orientationRef||{ready:false};
-        // movement
         this.baseSpeed=2; this.runMul=2.5; this._spd=0;
-        // vertical (eye) state
         this.GRAV=20;
         this.baseEye=1.6; this.crouchEye=0.9; this.jumpPeak=2.4;
         this.eyeY=this.baseEye; this.vertVel=0; this.jumpState='idle';
@@ -409,15 +401,13 @@
       update(dt, groundY, xrPresenting){
         const dol=this.sceneMgr.dolly;
 
-        // Trigger jump once on request (keyboard/mobile swipe)
         if(this.input.consumeJump() && this.jumpState==='idle'){
           const h=this.jumpPeak-this.baseEye;
           this.vertVel=Math.sqrt(2*this.GRAV*h);
           this.jumpState='jumping';
-          this._jumpJustStarted=true;       // ← tell network layer
+          this._jumpJustStarted=true;
         }
 
-        // Vertical motion
         if(this.jumpState==='jumping'){
           this.vertVel -= this.GRAV * dt;
           this.eyeY += this.vertVel * dt;
@@ -431,7 +421,6 @@
           this.eyeY += (target - this.eyeY) * Math.min(1, this.CROUCH_EASE * dt);
         }
 
-        // Phone orientation look (when not in XR)
         if(isMobile && this.orientationRef.ready && !xrPresenting){
           const {a,b,g}=this.orientationRef;
           const euler=new THREE.Euler(rad(b||0), rad(a||0), rad(-(g||0)), 'YXZ');
@@ -440,12 +429,10 @@
           dol.quaternion.copy(q);
         }
 
-        // Horizontal locomotion
         if (isMobile && !xrPresenting){
-          // World-axes drag: X from horizontal drag, Z from vertical drag
           const maxSpeed = this.baseSpeed * this.runMul;
           const vx = THREE.MathUtils.clamp(this.input.touch.dxNorm,-1,1) * maxSpeed;
-          const vz = -THREE.MathUtils.clamp(this.input.touch.dyNorm,-1,1) * maxSpeed; // up-drag = forward (-Z)
+          const vz = -THREE.MathUtils.clamp(this.input.touch.dyNorm,-1,1) * maxSpeed;
           if (vx || vz){
             dol.position.x += vx * dt;
             dol.position.z += vz * dt;
@@ -455,7 +442,6 @@
           }
         }
         else if(this.input.controls.isLocked || !isMobile){
-          // Desktop (and mobile if pointer-locked): camera-relative WASD
           const fwd=new THREE.Vector3(); this.sceneMgr.camera.getWorldDirection(fwd); fwd.y=0; fwd.normalize();
           const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0));
           let mx=0,mz=0; const m=this.input.m;
@@ -492,7 +478,7 @@
       constructor(sceneMgr, heightSampler){
         this.sceneMgr=sceneMgr; this.heightAt=heightSampler;
         this.map=new Map(); this.latest=new Map();
-        this.GRAV=20; this.JUMP_H=0.8; // visual jump height
+        this.GRAV=20; this.JUMP_H=0.8;
       }
       ensure(pub){
         if(this.map.has(pub)) return this.map.get(pub);
@@ -503,10 +489,8 @@
           new THREE.MeshStandardMaterial({color:colorFrom(pub),metalness:.2,roughness:.7})
         );
 
-        // Arrow at ball center (forward)
         const arrow=new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,0), 0.8, 0xffffff, 0.15, 0.08);
 
-        // Ground stick (thin cylinder; length updated per frame)
         const stickGeo = new THREE.CylinderGeometry(0.02,0.02, 1.6, 8);
         const stickMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness:.2, roughness:.6 });
         const stick = new THREE.Mesh(stickGeo, stickMat);
@@ -525,29 +509,23 @@
       }
       update(pub, pose, info){
         const ent=this.ensure(pub);
-
-        // Planar position from pose; local ground Y
         const x=pose.p[0], z=pose.p[2];
         const groundY = this.heightAt ? this.heightAt(x,z) : 0;
         const baseY = groundY + 1.6;
         ent.groundY = groundY;
         ent.baseY = baseY;
 
-        // If a jump was signaled, start visual jump
         if (pose.j){
           ent.jumpState='jumping';
           ent.vertVel=Math.sqrt(2*this.GRAV*this.JUMP_H);
         }
 
-        // orientation (arrow points forward)
         const q=new THREE.Quaternion(pose.q[0],pose.q[1],pose.q[2],pose.q[3]);
         ent.group.quaternion.copy(q);
 
-        // set planar immediately; Y handled in tick() to include jump offset
         ent.group.position.x = x;
         ent.group.position.z = z;
 
-        // Label (use current Y including jump offset)
         const curY = (ent.baseY + ent.jumpYOffset);
         const eul=new THREE.Euler().setFromQuaternion(q,'YXZ');
         const txt=`${shortHex(pub,8,6)}
@@ -560,10 +538,9 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         this.latest.set(pub, {pose, info, ts: now()});
       }
       tick(dt){
-        // integrate jump animation and update Y + stick
         for (const ent of this.map.values()){
           if (ent.jumpState==='jumping'){
-            ent.vertVel -= this.GRAV * dt;
+            ent.vertVel -= 20 * dt;
             ent.jumpYOffset += ent.vertVel * dt;
             if (ent.jumpYOffset <= 0){
               ent.jumpYOffset = 0;
@@ -571,10 +548,8 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
               ent.jumpState='idle';
             }
           }
-          // apply height (base terrain + jump offset)
           ent.group.position.y = ent.baseY + ent.jumpYOffset;
 
-          // stick length down to ground
           const h = Math.max(0.05, ent.group.position.y - ent.groundY);
           if (Math.abs(h - (ent.stickH||0)) > 1e-3) {
             ent.stick.geometry.dispose();
@@ -598,7 +573,7 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
       return false;
     }
 
-    /* ---------- NKN mesh (auto visuals + send actual Y + jump events) ---------- */
+    /* ---------- NKN mesh (sessions + packets) ---------- */
     class Mesh{
       constructor(app){
         this.app=app;
@@ -609,6 +584,9 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         this.addrPool=new Map();
         this.latestPose=new Map();
         this.knownIds=new Map();
+
+        // Sessions (ncp-js)
+        this.sessions=new Map();   // pub -> session
 
         this.hzCount=0; this.sent=0; this.dropped=0;
         this.byteWindow=[];
@@ -661,6 +639,16 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
           if(!isHex64(hex)){ hex=makeSeed(); localStorage.setItem('NKN_SEED_HEX_V1', hex); }
           this.client=new window.nkn.MultiClient({ seed: hex, identifier:'web', numSubClients:8, originalClient:true });
 
+          // Session support (ncp-js) — guard for older SDKs
+          try{
+            if (typeof this.client.listen === 'function' && typeof this.client.onSession === 'function') {
+              this.client.listen();
+              this.client.onSession((session)=>this._acceptSession(session));
+            } else {
+              console.warn('[NKN] Session API not available on this sdk build.');
+            }
+          }catch(e){ console.warn('[NKN] session init error', e); }
+
           this.client.onConnect(()=>{
             this.selfAddr=this.client.addr||null;
             this.selfPub=(this.client.getPublicKey()||'').toLowerCase();
@@ -681,7 +669,7 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
             if(msg.type==='hello' && msg.from){
               const pub=msg.from.toLowerCase();
               this._touchPeer(pub,t);
-              // auto inject visual
+              // auto visual
               this.app.remotes.ensure(pub);
               return;
             }
@@ -710,7 +698,6 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
               const pub=msg.from.toLowerCase();
               this._touchPeer(pub, t);
               const info={rtt:this.addrPool.get(src)?.rttMs ?? null, age: fmtAgo(now()-msg.ts)};
-              // include jump flag if present
               const pose=msg.pose;
               this.latestPose.set(pub, {p:pose.p, q:pose.q, ts:msg.ts, j:pose.j?1:0});
               this.app.remotes.update(pub, {p:pose.p, q:pose.q, j:pose.j?1:0}, info);
@@ -729,6 +716,74 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         }catch(err){ console.warn(err); setNkn('NKN: init failed','err'); }
       }
 
+      /* ---------- Session helpers ---------- */
+      _acceptSession(session){
+        const m = /\.([0-9a-f]{64})$/i.exec(session.remoteAddr || "");
+        const pub = m ? m[1].toLowerCase() : null;
+        if (!pub) return;
+
+        const prev = this.sessions.get(pub);
+        if (prev && prev !== session) { try{ prev.close?.(); }catch{} }
+        this.sessions.set(pub, session);
+
+        // Reader loop (you can route payload types here if you multiplex)
+        const readLoop = async () => {
+          try {
+            while (true) {
+              const data = await session.read(); // Uint8Array
+              if (!data || data.length===0) break;
+              // Example: decode JSON control frames if you prefix them
+              // this._onSessionData(pub, data);
+            }
+          } catch (e) {
+            console.warn('[NKN][session] read error', e);
+          } finally {
+            this.sessions.delete(pub);
+            try { session.close?.(); } catch {}
+          }
+        };
+        readLoop();
+        console.log('[NKN][session] established', session.localAddr, '⇄', session.remoteAddr);
+      }
+
+      async _getOrDialSession(pub){
+        const alive=this.sessions.get(pub);
+        if(alive) return alive;
+
+        const addrs=this._bestAddrs(pub);
+        let lastErr;
+        for(const to of addrs){
+          try{
+            const s = await this.client.dial?.(to);
+            if (!s) throw new Error('dial unsupported');
+            this.sessions.set(pub, s);
+            this._acceptSession(s); // starts reader
+            return s;
+          }catch(e){ lastErr = e; }
+        }
+        try{
+          const relay=`signal.${this.signallerHex}`;
+          const s=await this.client.dial?.(relay);
+          if (!s) throw new Error('dial unsupported');
+          this.sessions.set(pub, s); this._acceptSession(s);
+          return s;
+        }catch(e){ throw lastErr || e; }
+      }
+
+      async _sessionWrite(pub, bytes){
+        const s=await this._getOrDialSession(pub);
+        await s.write(bytes);
+      }
+
+      // Example API you can call: reliable snapshot
+      async sendStateSnapshot(pub, obj){
+        const enc = new TextEncoder().encode(JSON.stringify({type:'state',v:obj}));
+        await this._sessionWrite(pub, enc);
+      }
+      // Example chunk-sender (voice/file)
+      async sendChunk(pub, chunkUint8){ await this._sessionWrite(pub, chunkUint8); }
+
+      /* ---------- Packet utilities ---------- */
       _touchPeer(pub,ts){
         if(!pub) return;
         const p=this.peers.get(pub)||{addr:null,lastTs:0,isVestigial:false};
@@ -793,7 +848,6 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         for(const to of this._targets()){ this._sendRaw(to,msg).catch(()=>{}); }
       }
 
-      // yOverride = actual elevation (ground + eyeY), jumpEvent = boolean (send even if no transform diff)
       async sendPoseIfChanged(p, q, yOverride, jumpEvent=false){
         const t=now();
         if(!this._posePrev) this._posePrev={p:[p.x,p.y,p.z], q:[q.x,q.y,q.z,q.w], t:0};
@@ -802,7 +856,7 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         const dot=prev.q[0]*q.x + prev.q[1]*q.y + prev.q[2]*q.z + prev.q[3]*q.w;
         const ang=2*Math.acos(Math.min(1,Math.abs(dot)));
         const changed = posDelta>0.02 || ang>rad(2) || jumpEvent;
-        const intervalOk = (t - (this._posePrev.t||0)) >= 100 || jumpEvent; // allow immediate send on jump
+        const intervalOk = (t - (this._posePrev.t||0)) >= 100 || jumpEvent;
         if(!changed || !intervalOk) return;
         this._posePrev={p:[p.x,p.y,p.z], q:[q.x,q.y,q.z,q.w], t:t};
 
@@ -887,23 +941,17 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         this.sensors=new Sensors();
         this.input=new Input(this.sceneMgr);
 
-        // hex terrain
         this.hexGridMgr=new TileManager(this.sceneMgr.scene, 5, 50);
-        ipLocate(); // seed approximate origin silently
+        ipLocate();
 
-        // locomotion
         this.move=new Locomotion(this.sceneMgr,this.input,this.sensors.orient);
         this.clock=new THREE.Clock();
 
-        // UI updater
         this._uiTimer=setInterval(()=>this._updateLocalPoseUI(), 200);
 
-        // remotes (snap to our ground)
         this.remotes=new Remotes(this.sceneMgr, (x,z)=>this.hexGridMgr.getHeightAt(x,z));
-        // mesh
         this.mesh=new Mesh(this);
 
-        // main loop
         this.sceneMgr.renderer.setAnimationLoop(()=>this._tick());
       }
 
@@ -919,20 +967,22 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
         const dt=this.clock.getDelta();
         const pos=this.sceneMgr.dolly.position;
 
-        // terrain sample + tile expansion
         const groundY=this.hexGridMgr.getHeightAt(pos.x,pos.z);
         this.hexGridMgr.update(pos);
 
-        // locomotion (includes jump/crouch/motion look)
         const xrOn = this.sceneMgr.renderer.xr.isPresenting;
         this.move.update(dt, groundY, xrOn);
 
-        // send pose with ACTUAL elevation (ground + eyeY) and jump event
+        // Failsafe: clamp rig above ground + current eye height
+        const minY = groundY + this.move.eyeHeight();
+        if (this.sceneMgr.dolly.position.y < minY) {
+          this.sceneMgr.dolly.position.y = minY;
+        }
+
         const actualY = groundY + this.move.eyeHeight();
         const jumpEvt = this.move.popJumpStarted();
         this.mesh.sendPoseIfChanged(this.sceneMgr.dolly.position, this.sceneMgr.dolly.quaternion, actualY, jumpEvt);
 
-        // animate remote jumps & sticks
         this.remotes.tick(dt);
 
         this.sceneMgr.renderer.render(this.sceneMgr.scene, this.sceneMgr.camera);
@@ -945,4 +995,3 @@ YPR ${deg(eul.y).toFixed(1)}/${deg(eul.x).toFixed(1)}/${deg(eul.z).toFixed(1)}`;
   </script>
 </body>
 </html>
-in
